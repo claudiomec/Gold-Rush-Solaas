@@ -49,38 +49,51 @@ st.markdown("""
     div[data-testid="stForm"] { border: 1px solid #FFD700; background-color: #16181E; padding: 20px; border-radius: 10px; }
     div[data-testid="stDataFrame"] { background-color: #1C1E24; }
     .stRadio > label { display: none; }
+    
+    /* Estilo para mensagens de erro */
+    .error-box { background-color: #440000; color: #FFAAAA; padding: 10px; border-radius: 5px; font-size: 0.8em; }
     </style>
     """, unsafe_allow_html=True)
 
 # ======================================================
-# 2. GERENCIADOR DE BANCO DE DADOS (FIRESTORE)
+# 2. GERENCIADOR DE BANCO DE DADOS (COM DIAGNÓSTICO)
 # ======================================================
 
 @st.cache_resource
 def get_db():
-    """Conecta ao Firestore com tratamento de erro robusto."""
+    """Conecta ao Firestore e reporta erros."""
     try:
-        if not firebase_admin._apps:
-            if "firebase" in st.secrets:
-                # Detecta formato (TOML Dict ou JSON String)
-                if "text_key" in st.secrets["firebase"]:
-                    key_dict = json.loads(st.secrets["firebase"]["text_key"])
-                else:
-                    key_dict = dict(st.secrets["firebase"])
-                
-                # --- VACINA CONTRA ERRO DE FORMATAÇÃO ---
-                # Corrige as quebras de linha (\n) que costumam quebrar a conexão
-                if "private_key" in key_dict:
-                    key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
-                
-                cred = credentials.Certificate(key_dict)
-                firebase_admin.initialize_app(cred)
-                return firestore.client()
-        else:
+        # Se já existe app inicializado, retorna o cliente
+        if firebase_admin._apps:
             return firestore.client()
+            
+        # Tenta inicializar
+        if "firebase" in st.secrets:
+            # Detecta formato
+            if "text_key" in st.secrets["firebase"]:
+                key_dict = json.loads(st.secrets["firebase"]["text_key"])
+            else:
+                key_dict = dict(st.secrets["firebase"])
+            
+            # Correção de quebras de linha
+            if "private_key" in key_dict:
+                key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
+            
+            cred = credentials.Certificate(key_dict)
+            firebase_admin.initialize_app(cred)
+            
+            # Limpa erro anterior se conectar
+            if "db_error" in st.session_state:
+                del st.session_state["db_error"]
+                
+            return firestore.client()
+        else:
+            st.session_state["db_error"] = "Segredo [firebase] não encontrado no TOML."
+            return None
+            
     except Exception as e:
-        # Imprime o erro no console do servidor para debug
-        print(f"CRITICAL DB ERROR: {e}")
+        # Salva o erro para mostrar na tela
+        st.session_state["db_error"] = str(e)
         return None
 
 def authenticate_user(username, password):
@@ -104,30 +117,20 @@ def authenticate_user(username, password):
     return None
 
 def create_user_in_db(username, password, name, role):
-    """Cria usuário no Firestore."""
     db = get_db()
-    if not db:
-        return False, "❌ Erro Crítico: Banco de Dados Desconectado. Verifique os Segredos."
-    
+    if not db: return False, "Banco Offline. Veja detalhes na lateral."
     try:
-        doc_ref = db.collection('users').document(username)
-        doc_ref.set({
-            'username': username,
-            'password': password,
-            'name': name,
-            'role': role,
+        db.collection('users').document(username).set({
+            'username': username, 'password': password, 'name': name, 'role': role,
             'created_at': firestore.SERVER_TIMESTAMP
         })
-        return True, "✅ Usuário criado com sucesso!"
-    except Exception as e:
-        return False, f"Erro ao gravar: {str(e)}"
+        return True, "Usuário criado!"
+    except Exception as e: return False, str(e)
 
 def list_users_from_db():
-    """Lista usuários."""
     db = get_db()
     if not db: return []
-    try:
-        return [doc.to_dict() for doc in db.collection('users').stream()]
+    try: return [doc.to_dict() for doc in db.collection('users').stream()]
     except: return []
 
 # ======================================================
@@ -135,30 +138,22 @@ def list_users_from_db():
 # ======================================================
 
 def check_password():
-    if st.session_state.get("password_correct", False):
-        return True
-
+    if st.session_state.get("password_correct", False): return True
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown("<br><br><h1 style='text-align: center;'>🔐 Gold Rush Access</h1>", unsafe_allow_html=True)
-        with st.form("login_form"):
-            user = st.text_input("Usuário")
-            password = st.text_input("Senha", type="password")
-            submitted = st.form_submit_button("Entrar", use_container_width=True)
-            if submitted:
-                user_data = authenticate_user(user, password)
+        with st.form("login"):
+            u = st.text_input("Usuário"); p = st.text_input("Senha", type="password")
+            if st.form_submit_button("Entrar", use_container_width=True):
+                user_data = authenticate_user(u, p)
                 if user_data:
-                    st.session_state["password_correct"] = True
-                    st.session_state["user_role"] = user_data.get("role", "client")
-                    st.session_state["user_name"] = user_data.get("name", user)
+                    st.session_state.update({"password_correct": True, "user_role": user_data.get("role", "client"), "user_name": user_data.get("name", u)})
                     st.rerun()
-                else:
-                    st.error("Acesso negado.")
+                else: st.error("Acesso negado.")
     return False
 
 def logout():
     st.session_state["password_correct"] = False
-    st.session_state["user_role"] = None
     st.rerun()
 
 # ======================================================
@@ -166,135 +161,107 @@ def logout():
 # ======================================================
 @st.cache_data(ttl=3600)
 def get_market_data(days_back=180):
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=days_back)
-    wti = yf.download("CL=F", start=start_date, end=end_date, progress=False, auto_adjust=True)['Close']
-    brl = yf.download("BRL=X", start=start_date, end=end_date, progress=False, auto_adjust=True)['Close']
-    df = pd.concat([wti, brl], axis=1).dropna()
-    df.columns = ['WTI', 'USD_BRL']
+    end = datetime.now(); start = end - timedelta(days=days_back)
+    wti = yf.download("CL=F", start=start, end=end, progress=False, auto_adjust=True)['Close']
+    brl = yf.download("BRL=X", start=start, end=end, progress=False, auto_adjust=True)['Close']
+    df = pd.concat([wti, brl], axis=1).dropna(); df.columns = ['WTI', 'USD_BRL']
     df['PP_FOB_USD'] = (df['WTI'] * 0.014) + 0.35
     return df
+
+# Função auxiliar para mostrar status do DB na Sidebar
+def show_db_status():
+    db = get_db()
+    if db:
+        st.caption("🟢 Database: Online")
+    else:
+        st.caption("🔴 Database: Offline")
+        if "db_error" in st.session_state:
+            with st.expander("Ver Detalhes do Erro"):
+                st.markdown(f"<div class='error-box'>{st.session_state['db_error']}</div>", unsafe_allow_html=True)
 
 def run_monitor_module(is_admin=False):
     with st.sidebar:
         if is_admin: st.success(f"Admin: {st.session_state['user_name']}")
         else: st.info(f"Cliente: {st.session_state['user_name']}")
-        
-        # Indicador de Status do Banco
-        if get_db(): st.caption("🟢 Database: Online")
-        else: st.caption("🔴 Database: Offline (Modo Backup)")
+        show_db_status() # Mostra status aqui
         
         st.header("⚙️ Parâmetros")
-        ocean_freight = st.slider("Frete Marítimo (USD/ton)", 0, 300, 60, step=10)
-        icms_user = st.selectbox("ICMS Destino (%)", [18, 12, 7, 4], index=0)
-        freight_user = st.slider("Frete Interno (R$/kg)", 0.00, 0.50, 0.15, step=0.01)
-        margin_user = st.slider("Margem (%)", 0, 20, 10)
-        st.markdown("---")
-        if st.button("Sair"): logout()
+        ocean = st.slider("Frete Marítimo", 0, 300, 60, 10)
+        icms = st.selectbox("ICMS", [18, 12, 7, 4])
+        freight = st.slider("Frete Interno", 0.0, 0.5, 0.15, 0.01)
+        margin = st.slider("Margem", 0, 20, 10)
+        st.markdown("---"); st.button("Sair", on_click=logout)
 
     st.title("Monitor de Custo Industrial: Polipropileno")
     with st.spinner('Calculando...'):
-        df = get_market_data(days_back=180)
-        df['CFR_USD'] = df['PP_FOB_USD'] + (ocean_freight / 1000)
-        df['Landed_BRL'] = df['CFR_USD'] * df['USD_BRL'] * 1.12
-        df['Operational_Cost'] = df['Landed_BRL'] + freight_user
-        df['Price_Net'] = df['Operational_Cost'] * (1 + (margin_user/100))
-        df['PP_Price'] = df['Price_Net'] / (1 - (icms_user/100))
-        df['Trend'] = df['PP_Price'].rolling(window=7).mean()
+        df = get_market_data()
+        df['CFR'] = df['PP_FOB_USD'] + (ocean/1000)
+        df['Landed'] = df['CFR'] * df['USD_BRL'] * 1.12
+        df['Final'] = (df['Landed'] + freight) * (1 + margin/100) / (1 - icms/100)
+        df['Trend'] = df['Final'].rolling(7).mean()
         
-        current_price, variation_pct = df['PP_Price'].iloc[-1], (df['PP_Price'].iloc[-1]/df['PP_Price'].iloc[-7]-1)*100
+        curr = df['Final'].iloc[-1]; var = (curr/df['Final'].iloc[-7]-1)*100
+        c1,c2,c3,c4 = st.columns(4)
+        c1.metric("Preço Final", f"R$ {curr:.2f}", f"{curr-df['Final'].iloc[-2]:.2f}")
+        c2.metric("Tendência", f"{var:.2f}%", delta_color="inverse")
+        c3.metric("Frete Marítimo", f"USD {ocean}"); c4.metric("Dólar", f"R$ {df['USD_BRL'].iloc[-1]:.4f}")
         
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Preço Final", f"R$ {current_price:.2f}", f"{current_price-df['PP_Price'].iloc[-2]:.2f}")
-        c2.metric("Tendência (7d)", f"{variation_pct:.2f}%", delta_color="inverse")
-        c3.metric("Frete Marítimo", f"USD {ocean_freight}")
-        c4.metric("Dólar", f"R$ {df['USD_BRL'].iloc[-1]:.4f}")
-
-        fig, ax = plt.subplots(figsize=(10, 3))
-        fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
-        ax.plot(df.index, df['PP_Price'], color='#666', alpha=0.3)
-        ax.plot(df.index, df['Trend'], color='#FFD700', linewidth=2.5)
-        ax.tick_params(axis='both', colors='#AAA', labelsize=8)
-        for s in ax.spines.values(): s.set_color('#333')
+        fig, ax = plt.subplots(figsize=(10, 3)); fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
+        ax.plot(df.index, df['Final'], color='#666', alpha=0.3); ax.plot(df.index, df['Trend'], color='#FFD700', lw=2.5)
+        ax.tick_params(colors='#AAA'); [s.set_color('#333') for s in ax.spines.values()]
         st.pyplot(fig, use_container_width=True)
-
-        if variation_pct > 0.5: msg, cor = "⚠️ <b>ALTA:</b> Pressão de custos.", "#FF4B4B"
-        elif variation_pct < -0.5: msg, cor = "✅ <b>BAIXA:</b> Oportunidade.", "#00CC96"
-        else: msg, cor = "⚖️ <b>ESTÁVEL:</b> Mercado lateral.", "#FFAA00"
-        st.markdown(f"<div style='background-color:#1C1E24;padding:10px;border-left:4px solid {cor};color:#DDD;font-size:0.9rem'>{msg}</div>", unsafe_allow_html=True)
 
 def run_backtest_module():
     with st.sidebar:
-        st.header("🧪 Lab")
-        coef_wti = st.number_input("Coef. WTI", value=0.014, format="%.4f")
-        coef_spread = st.number_input("Spread ($)", value=0.35)
-        coef_markup = st.number_input("Markup", value=1.45)
-        years_back = st.slider("Anos", 1, 5, 3)
-        st.markdown("---")
-        if st.button("Sair", key='bklout'): logout()
-
-    st.title("🧪 Backtest Lab")
-    df = get_market_data(days_back=years_back*365)
-    df['PP_Theoretical'] = ((df['WTI'] * coef_wti) + coef_spread) * df['USD_BRL'] * coef_markup
+        st.header("🧪 Lab"); show_db_status()
+        wti = st.number_input("Coef WTI", value=0.014, format="%.4f")
+        spr = st.number_input("Spread", value=0.35)
+        mkp = st.number_input("Markup", value=1.45)
+        yr = st.slider("Anos", 1, 5, 3)
+        st.markdown("---"); st.button("Sair", key='bk', on_click=logout)
     
+    st.title("🧪 Laboratório de Backtest")
+    df = get_market_data(yr*365)
+    df['Teorico'] = ((df['WTI']*wti)+spr)*df['USD_BRL']*mkp
     c1, c2 = st.columns([2, 1])
     with c1:
-        fig, ax = plt.subplots(figsize=(10, 4))
-        fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
-        ax.plot(df.index, df['PP_Theoretical'], color='#FFD700')
-        ax.tick_params(axis='both', colors='#AAA', rotation=45)
+        fig, ax = plt.subplots(figsize=(10, 4)); fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
+        ax.plot(df.index, df['Teorico'], color='#FFD700'); ax.tick_params(colors='#AAA', rotation=45)
         st.pyplot(fig, use_container_width=True)
     with c2:
-        up = st.file_uploader("Upload CSV", type="csv")
+        up = st.file_uploader("CSV", type="csv")
         if up and mean_absolute_percentage_error:
             try:
                 rdf = pd.read_csv(up); rdf['Data'] = pd.to_datetime(rdf['Data']); rdf = rdf.set_index('Data').sort_index()
                 comp = df.join(rdf, how='inner').dropna()
                 if not comp.empty:
-                    mape = mean_absolute_percentage_error(comp['Preco'], comp['PP_Theoretical'])
-                    st.metric("Erro (MAPE)", f"{mape*100:.1f}%")
-                else: st.warning("Sem match.")
+                    mape = mean_absolute_percentage_error(comp['Preco'], comp['Teorico'])
+                    st.metric("Erro MAPE", f"{mape*100:.1f}%")
             except: st.error("Erro CSV")
 
 def run_user_management_module():
     with st.sidebar:
-        st.header("👥 Usuários")
-        
-        # Indicador Visual de Status
-        if get_db():
-            st.caption("🟢 Sistema Online")
-        else:
-            st.error("🔴 Sistema Offline")
-            st.caption("Verifique os Segredos do Firebase.")
-            
-        st.markdown("---")
-        if st.button("Sair", key='usrlout'): logout()
+        st.header("👥 Usuários"); show_db_status()
+        st.markdown("---"); st.button("Sair", key='usr', on_click=logout)
 
     st.title("👥 Controle de Acessos")
-    
-    with st.form("new_user"):
+    with st.form("new"):
         c1, c2 = st.columns(2)
         u = c1.text_input("Login"); p = c1.text_input("Senha", type="password")
         n = c2.text_input("Nome"); r = c2.selectbox("Perfil", ["client", "admin"])
         if st.form_submit_button("Criar", use_container_width=True):
-            if u and p and n:
-                ok, msg = create_user_in_db(u, p, n, r)
-                if ok: st.success(msg)
-                else: st.error(msg)
-            else: st.warning("Preencha tudo.")
-    
-    st.markdown("---")
-    if st.button("🔄 Atualizar Lista"):
+            ok, msg = create_user_in_db(u, p, n, r)
+            if ok: st.success(msg)
+            else: st.error(msg)
+            
+    if st.button("🔄 Listar"):
         users = list_users_from_db()
         if users: st.dataframe(pd.DataFrame(users)[['username', 'name', 'role']], use_container_width=True)
-        else: st.info("Nenhum usuário ou erro de conexão.")
 
 if check_password():
-    role = st.session_state["user_role"]
-    if role == "admin":
-        page = st.sidebar.radio("Menu", ["Monitor", "Backtest", "Usuários"])
-        if page == "Monitor": run_monitor_module(is_admin=True)
-        elif page == "Backtest": run_backtest_module()
-        elif page == "Usuários": run_user_management_module()
-    elif role == "client":
-        run_monitor_module(is_admin=False)
+    if st.session_state["user_role"] == "admin":
+        pg = st.sidebar.radio("Menu", ["Monitor", "Backtest", "Usuários"])
+        if pg == "Monitor": run_monitor_module(True)
+        elif pg == "Backtest": run_backtest_module()
+        elif pg == "Usuários": run_user_management_module()
+    else: run_monitor_module(False)
