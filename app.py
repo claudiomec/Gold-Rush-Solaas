@@ -8,7 +8,7 @@ import numpy as np
 import json
 import time
 
-# Bibliotecas do Firebase (Banco de Dados)
+# Bibliotecas do Firebase
 import firebase_admin
 from firebase_admin import credentials, firestore
 
@@ -53,47 +53,34 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ======================================================
-# 2. GERENCIADOR DE BANCO DE DADOS (COM AUTO-REPARO)
+# 2. GERENCIADOR DE BANCO DE DADOS
 # ======================================================
 
 @st.cache_resource
 def get_db():
-    """Conecta ao Firestore com limpeza SUPER agressiva de credenciais."""
     try:
         if firebase_admin._apps:
             return firestore.client()
             
         if "firebase" in st.secrets:
-            # Carrega as configurações
             if "text_key" in st.secrets["firebase"]:
                 key_dict = json.loads(st.secrets["firebase"]["text_key"])
             else:
                 key_dict = dict(st.secrets["firebase"])
             
-            # --- SANITIZAÇÃO DA CHAVE (MODO "LAVA JATO") ---
+            # Auto-Reparo de Chave
             if "private_key" in key_dict:
                 pk = key_dict["private_key"]
-                
-                # 1. Remove cabeçalhos antigos (para garantir que não fiquem duplicados)
-                pk = pk.replace("-----BEGIN PRIVATE KEY-----", "")
-                pk = pk.replace("-----END PRIVATE KEY-----", "")
-                
-                # 2. Remove TODA sujeira: quebras de linha literais (\n), reais, espaços e tabs
-                pk = pk.replace("\\n", "").replace("\n", "").replace(" ", "").replace("\t", "")
-                
-                # 3. Remove aspas que podem ter vindo do JSON
-                pk = pk.replace('"', '').replace("'", "")
-                
-                # 4. Reconstrói o formato PEM padrão limpo
+                pk = pk.replace("-----BEGIN PRIVATE KEY-----", "").replace("-----END PRIVATE KEY-----", "")
+                pk = pk.replace("\\n", "").replace("\n", "").replace(" ", "").replace("\t", "").replace('"', '').replace("'", "")
                 key_dict["private_key"] = "-----BEGIN PRIVATE KEY-----\n" + pk + "\n-----END PRIVATE KEY-----"
 
             cred = credentials.Certificate(key_dict)
             firebase_admin.initialize_app(cred)
             return firestore.client()
         return None
-            
     except Exception as e:
-        st.error(f"🔥 Erro na Chave do Firebase: {e}")
+        print(f"DB Error: {e}")
         return None
 
 def authenticate_user(username, password):
@@ -102,26 +89,24 @@ def authenticate_user(username, password):
         try:
             users_ref = db.collection('users')
             query = users_ref.where('username', '==', username).where('password', '==', password).stream()
-            for doc in query:
-                return doc.to_dict()
-        except Exception as e:
-            print(f"Erro leitura DB: {e}")
+            for doc in query: return doc.to_dict()
+        except: pass
     
-    if "users" in st.secrets:
-        if username in st.secrets["users"] and st.secrets["users"][username]["password"] == password:
+    if "users" in st.secrets and username in st.secrets["users"]:
+        if st.secrets["users"][username]["password"] == password:
             return st.secrets["users"][username]
     return None
 
 def create_user_in_db(username, password, name, role):
     db = get_db()
-    if not db: return False, "Banco Offline. Verifique a chave privada."
+    if not db: return False, "Banco Offline."
     try:
         db.collection('users').document(username).set({
             'username': username, 'password': password, 'name': name, 'role': role,
             'created_at': firestore.SERVER_TIMESTAMP
         })
-        return True, "Usuário criado com sucesso!"
-    except Exception as e: return False, f"Erro: {str(e)}"
+        return True, "Usuário criado!"
+    except Exception as e: return False, str(e)
 
 def list_users_from_db():
     db = get_db()
@@ -130,7 +115,7 @@ def list_users_from_db():
     except: return []
 
 # ======================================================
-# 3. SISTEMA DE LOGIN
+# 3. LOGIN
 # ======================================================
 
 def check_password():
@@ -150,7 +135,6 @@ def check_password():
 
 def logout():
     st.session_state["password_correct"] = False
-    st.session_state["user_role"] = None
     st.rerun()
 
 # ======================================================
@@ -162,10 +146,7 @@ def get_market_data(days_back=180):
     wti = yf.download("CL=F", start=start, end=end, progress=False, auto_adjust=True)['Close']
     brl = yf.download("BRL=X", start=start, end=end, progress=False, auto_adjust=True)['Close']
     
-    # Validação de dados vazios para evitar erros
     if wti.empty or brl.empty:
-        # Retorna um dataframe dummy para não quebrar a UI, mas avisa
-        st.warning("Atenção: Dados de mercado indisponíveis hoje. Usando simulação.")
         idx = pd.date_range(start, end)
         return pd.DataFrame({'WTI': [70]*len(idx), 'USD_BRL': [5.0]*len(idx), 'PP_FOB_USD': [1.2]*len(idx)}, index=idx)
 
@@ -173,16 +154,13 @@ def get_market_data(days_back=180):
     df['PP_FOB_USD'] = (df['WTI'] * 0.014) + 0.35
     return df
 
-def show_db_status():
-    db = get_db()
-    if db: st.caption("🟢 Database: Online")
-    else: st.caption("🔴 Database: Offline (Modo Backup)")
-
 def run_monitor_module(is_admin=False):
     with st.sidebar:
         if is_admin: st.success(f"Admin: {st.session_state['user_name']}")
         else: st.info(f"Cliente: {st.session_state['user_name']}")
-        show_db_status()
+        if get_db(): st.caption("🟢 Database: Online")
+        else: st.caption("🔴 Database: Offline")
+        
         st.header("⚙️ Parâmetros")
         ocean = st.slider("Frete Marítimo", 0, 300, 60, 10)
         icms = st.selectbox("ICMS", [18, 12, 7, 4])
@@ -193,13 +171,15 @@ def run_monitor_module(is_admin=False):
     st.title("Monitor de Custo Industrial: Polipropileno")
     with st.spinner('Calculando...'):
         df = get_market_data()
-        df['CFR'] = df['PP_FOB_USD'] + (ocean/1000)
-        df['Landed'] = df['CFR'] * df['USD_BRL'] * 1.12
-        df['Final'] = (df['Landed'] + freight) * (1 + margin/100) / (1 - icms/100)
-        df['Trend'] = df['Final'].rolling(7).mean()
         
         if not df.empty:
+            df['CFR'] = df['PP_FOB_USD'] + (ocean/1000)
+            df['Landed'] = df['CFR'] * df['USD_BRL'] * 1.12
+            df['Final'] = (df['Landed'] + freight) * (1 + margin/100) / (1 - icms/100)
+            df['Trend'] = df['Final'].rolling(7).mean()
+            
             curr = df['Final'].iloc[-1]; var = (curr/df['Final'].iloc[-7]-1)*100
+            
             c1,c2,c3,c4 = st.columns(4)
             c1.metric("Preço Final", f"R$ {curr:.2f}", f"{curr-df['Final'].iloc[-2]:.2f}")
             c2.metric("Tendência", f"{var:.2f}%", delta_color="inverse")
@@ -207,7 +187,13 @@ def run_monitor_module(is_admin=False):
             
             fig, ax = plt.subplots(figsize=(10, 3)); fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
             ax.plot(df.index, df['Final'], color='#666', alpha=0.3); ax.plot(df.index, df['Trend'], color='#FFD700', lw=2.5)
-            ax.tick_params(colors='#AAA'); [s.set_color('#333') for s in ax.spines.values()]
+            ax.tick_params(colors='#AAA')
+            
+            # --- CORREÇÃO DO ARTEFATO VISUAL ---
+            # Loop explícito em vez de list comprehension para não imprimir NULL na tela
+            for s in ax.spines.values():
+                s.set_color('#333')
+            
             st.pyplot(fig, use_container_width=True)
 
             if var > 0.5: msg, cor = "⚠️ <b>ALTA:</b> Pressão de custos.", "#FF4B4B"
@@ -217,7 +203,8 @@ def run_monitor_module(is_admin=False):
 
 def run_backtest_module():
     with st.sidebar:
-        st.header("🧪 Lab"); show_db_status()
+        st.header("🧪 Lab"); 
+        if get_db(): st.caption("🟢 Online")
         wti = st.number_input("Coef WTI", value=0.014, format="%.4f")
         spr = st.number_input("Spread", value=0.35)
         mkp = st.number_input("Markup", value=1.45)
@@ -226,26 +213,28 @@ def run_backtest_module():
     
     st.title("🧪 Backtest Lab")
     df = get_market_data(yr*365)
-    df['Teorico'] = ((df['WTI']*wti)+spr)*df['USD_BRL']*mkp
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        fig, ax = plt.subplots(figsize=(10, 4)); fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
-        ax.plot(df.index, df['Teorico'], color='#FFD700'); ax.tick_params(colors='#AAA', rotation=45)
-        st.pyplot(fig, use_container_width=True)
-    with c2:
-        up = st.file_uploader("CSV", type="csv")
-        if up and mean_absolute_percentage_error:
-            try:
-                rdf = pd.read_csv(up); rdf['Data'] = pd.to_datetime(rdf['Data']); rdf = rdf.set_index('Data').sort_index()
-                comp = df.join(rdf, how='inner').dropna()
-                if not comp.empty:
-                    mape = mean_absolute_percentage_error(comp['Preco'], comp['Teorico'])
-                    st.metric("Erro MAPE", f"{mape*100:.1f}%")
-            except: st.error("Erro CSV")
+    if not df.empty:
+        df['Teorico'] = ((df['WTI']*wti)+spr)*df['USD_BRL']*mkp
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            fig, ax = plt.subplots(figsize=(10, 4)); fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
+            ax.plot(df.index, df['Teorico'], color='#FFD700'); ax.tick_params(colors='#AAA', rotation=45)
+            st.pyplot(fig, use_container_width=True)
+        with c2:
+            up = st.file_uploader("CSV", type="csv")
+            if up and mean_absolute_percentage_error:
+                try:
+                    rdf = pd.read_csv(up); rdf['Data'] = pd.to_datetime(rdf['Data']); rdf = rdf.set_index('Data').sort_index()
+                    comp = df.join(rdf, how='inner').dropna()
+                    if not comp.empty:
+                        mape = mean_absolute_percentage_error(comp['Preco'], comp['Teorico'])
+                        st.metric("Erro MAPE", f"{mape*100:.1f}%")
+                except: st.error("Erro CSV")
 
 def run_user_management_module():
     with st.sidebar:
-        st.header("👥 Usuários"); show_db_status()
+        st.header("👥 Usuários")
+        if get_db(): st.caption("🟢 Online")
         st.markdown("---"); st.button("Sair", key='usr', on_click=logout)
 
     st.title("👥 Controle de Acessos")
