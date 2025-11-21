@@ -53,6 +53,12 @@ st.markdown("""
     /* Estilo para Cards de Economia */
     .savings-card { background-color: #1C1E24; border-left: 5px solid #00CC96; padding: 15px; margin-bottom: 10px; border-radius: 5px; }
     .loss-card { background-color: #1C1E24; border-left: 5px solid #FF4B4B; padding: 15px; margin-bottom: 10px; border-radius: 5px; }
+    
+    /* Centralizar Imagem de Login */
+    div[data-testid="stImage"] {
+        display: flex;
+        justify-content: center;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -98,10 +104,8 @@ def authenticate_user(username, password):
     
     if "users" in st.secrets and username in st.secrets["users"]:
         if st.secrets["users"][username]["password"] == password:
-            # Usuários de backup (secrets) têm acesso padrão apenas ao Monitor
             user_data = st.secrets["users"][username]
             if "modules" not in user_data:
-                # Converte o objeto st.secrets para dict normal para poder adicionar campos
                 user_data = dict(user_data)
                 user_data["modules"] = ["Monitor"] 
             return user_data
@@ -113,7 +117,7 @@ def create_user_in_db(username, password, name, role, modules):
     try:
         db.collection('users').document(username).set({
             'username': username, 'password': password, 'name': name, 'role': role,
-            'modules': modules, # Lista de módulos permitidos
+            'modules': modules,
             'created_at': firestore.SERVER_TIMESTAMP
         })
         return True, "Usuário criado!"
@@ -126,14 +130,23 @@ def list_users_from_db():
     except: return []
 
 # ======================================================
-# 3. LOGIN
+# 3. LOGIN (COM IMAGEM)
 # ======================================================
 
 def check_password():
     if st.session_state.get("password_correct", False): return True
+    
+    # Coluna central para login
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.markdown("<br><br><h1 style='text-align: center;'>🔐 Gold Rush Access</h1>", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # --- IMAGEM DE CONTEXTO (FÁBRICA) ---
+        st.image("https://cdn-icons-png.flaticon.com/512/2534/2534183.png", width=120)
+        
+        st.markdown("<h1 style='text-align: center;'>🔐 Gold Rush Access</h1>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: #888;'>Inteligência de Mercado Industrial</p>", unsafe_allow_html=True)
+        
         with st.form("login"):
             u = st.text_input("Usuário"); p = st.text_input("Senha", type="password")
             if st.form_submit_button("Entrar", use_container_width=True):
@@ -143,7 +156,6 @@ def check_password():
                         "password_correct": True, 
                         "user_role": user_data.get("role", "client"), 
                         "user_name": user_data.get("name", u),
-                        # Recupera módulos ou define padrão se não existir (retrocompatibilidade)
                         "user_modules": user_data.get("modules", ["Monitor"]) 
                     })
                     st.rerun()
@@ -171,26 +183,14 @@ def get_market_data(days_back=180):
     df['PP_FOB_USD'] = (df['WTI'] * 0.014) + 0.35
     return df
 
-# --- HELPER DE CÁLCULO ---
 def calculate_fair_price_now():
-    # Função rápida para pegar o preço justo atual (usada na calculadora)
-    df = get_market_data(7) # Pega só última semana
+    df = get_market_data(7)
     if df.empty: return 0
-    
-    # Parâmetros Padrão de Mercado (SP)
-    ocean_freight = 60 # USD/ton
-    freight_internal = 0.15 # R$/kg
-    icms = 18 # %
-    margin = 10 # %
-    
     last_row = df.iloc[-1]
-    cfr = last_row['PP_FOB_USD'] + (ocean_freight/1000)
+    # Parâmetros Padrão SP
+    cfr = last_row['PP_FOB_USD'] + (60/1000)
     landed = cfr * last_row['USD_BRL'] * 1.12
-    operational = landed + freight_internal
-    price_net = operational * (1 + margin/100)
-    price_final = price_net / (1 - icms/100)
-    
-    return price_final
+    return (landed + 0.15) * 1.10 / (1 - 0.18)
 
 # ======================================================
 # 5. TELAS (VIEWS)
@@ -243,72 +243,34 @@ def run_financial_calculator():
         st.info("Módulo Premium")
         st.markdown("---"); st.button("Sair", key='finlogout', on_click=logout)
 
-    st.title("💰 Calculadora Financeira (Tira-Teima)")
-    st.markdown("Compare suas condições atuais com o Preço Justo de Mercado (Gold Rush) e descubra oportunidades de economia.")
-    
-    # Preço Justo Atual (Puxado do Modelo)
+    st.title("💰 Calculadora Financeira")
     fair_price = calculate_fair_price_now()
     
-    col_input, col_result = st.columns([1, 1])
-    
-    with col_input:
-        st.subheader("Seus Dados Atuais")
-        current_price_user = st.number_input("Preço Pago na Última NF (R$/kg)", value=10.50, step=0.01, format="%.2f")
-        volume_ton = st.number_input("Volume Mensal de Compra (Toneladas)", value=50, step=10)
-        volume_kg = volume_ton * 1000
-        
-    with col_result:
-        st.subheader("Análise de Competitividade")
-        
-        delta = current_price_user - fair_price
-        
-        # Card do Preço Justo
-        st.markdown(f"""
-        <div style='background-color: #262730; padding: 15px; border-radius: 8px; text-align: center;'>
-            <span style='color: #AAA; font-size: 0.9rem;'>Preço Justo de Mercado (Hoje)</span><br>
-            <span style='color: #FFD700; font-size: 2rem; font-weight: bold;'>R$ {fair_price:.2f}</span>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown("<br>", unsafe_allow_html=True)
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        st.subheader("Seus Dados")
+        current = st.number_input("Preço Pago (R$/kg)", value=10.50, format="%.2f")
+        vol = st.number_input("Volume (Ton)", value=50) * 1000
+    with c2:
+        st.subheader("Análise")
+        delta = current - fair_price
+        st.markdown(f"<div style='background:#262730;padding:15px;border-radius:8px;text-align:center'><span style='color:#AAA'>Preço Justo</span><br><span style='color:#FFD700;font-size:2rem'>R$ {fair_price:.2f}</span></div><br>", unsafe_allow_html=True)
         
         if delta > 0:
-            # Cliente está pagando mais caro (Perda)
-            monthly_loss = delta * volume_kg
-            annual_loss = monthly_loss * 12
-            pct_over = (delta / fair_price) * 100
-            
-            st.markdown(f"""
-            <div class='loss-card'>
-                <h3 style='margin:0; color: #FF4B4B;'>🔴 Ineficiência Detectada</h3>
-                <p style='color: white;'>Você está pagando <b>{pct_over:.1f}% acima</b> do preço justo.</p>
-                <hr style='border-color: #444;'>
-                <p style='color: #DDD; margin-bottom: 0;'>Desperdício Mensal Estimado:</p>
-                <h2 style='color: #FF4B4B; margin: 0;'>R$ {monthly_loss:,.2f}</h2>
-                <p style='color: #DDD; margin-bottom: 0; margin-top: 10px;'>Projeção Anual:</p>
-                <h4 style='color: #FF4B4B; margin: 0;'>R$ {annual_loss:,.2f}</h4>
-            </div>
-            """, unsafe_allow_html=True)
+            loss = delta * vol
+            st.markdown(f"<div class='loss-card'><h3 style='color:#FF4B4B'>🔴 Ineficiência</h3><p style='color:white'>Você paga <b>{(delta/fair_price)*100:.1f}% acima</b>.</p><hr><p style='color:#DDD'>Desperdício Mensal:</p><h2 style='color:#FF4B4B'>R$ {loss:,.2f}</h2></div>", unsafe_allow_html=True)
         else:
-            # Cliente está pagando bem (Ganho)
-            monthly_gain = abs(delta) * volume_kg
-            st.markdown(f"""
-            <div class='savings-card'>
-                <h3 style='margin:0; color: #00CC96;'>🟢 Excelente Negociação!</h3>
-                <p style='color: white;'>Você está pagando abaixo do preço de referência.</p>
-                <h2 style='color: #00CC96;'>Economia: R$ {monthly_gain:,.2f}/mês</h2>
-            </div>
-            """, unsafe_allow_html=True)
+            gain = abs(delta) * vol
+            st.markdown(f"<div class='savings-card'><h3 style='color:#00CC96'>🟢 Ótima Negociação</h3><p style='color:white'>Abaixo do preço justo.</p><h2 style='color:#00CC96'>Economia: R$ {gain:,.2f}/mês</h2></div>", unsafe_allow_html=True)
 
 def run_backtest_module():
     with st.sidebar:
         st.header("🧪 Lab"); st.button("Sair", key='bklout', on_click=logout)
     st.title("🧪 Backtest Lab")
-    # (Código resumido do backtest - mantém o mesmo da versão anterior)
     df = get_market_data(1095)
     c1, c2 = st.columns([2, 1])
-    with c1: st.line_chart(df['WTI'], color="#FFD700") # Simplificado para economizar linhas
-    with c2: st.info("Módulo de uso interno para calibração.")
+    with c1: st.line_chart(df['WTI'], color="#FFD700")
+    with c2: st.info("Módulo interno de calibração.")
 
 def run_user_management_module():
     with st.sidebar:
@@ -317,35 +279,25 @@ def run_user_management_module():
         st.markdown("---"); st.button("Sair", key='usr', on_click=logout)
 
     st.title("👥 Controle de Acessos")
-    
     with st.form("new"):
         c1, c2 = st.columns(2)
         u = c1.text_input("Login"); p = c1.text_input("Senha", type="password")
         n = c2.text_input("Nome"); r = c2.selectbox("Perfil", ["client", "admin"])
-        
-        # SELETOR DE MÓDULOS (Novidade v4.0)
-        st.markdown("**Módulos Contratados:**")
-        modules = st.multiselect(
-            "Selecione os acessos deste cliente:",
-            ["Monitor", "Calculadora Financeira"],
-            default=["Monitor"]
-        )
-        
+        mod = st.multiselect("Módulos", ["Monitor", "Calculadora Financeira"], default=["Monitor"])
         if st.form_submit_button("Criar", use_container_width=True):
-            ok, msg = create_user_in_db(u, p, n, r, modules)
+            ok, msg = create_user_in_db(u, p, n, r, mod)
             if ok: st.success(msg)
             else: st.error(msg)
             
     if st.button("🔄 Listar"):
         users = list_users_from_db()
         if users: 
-            # Tratamento para exibir lista de módulos na tabela
-            df_users = pd.DataFrame(users)
-            if 'modules' not in df_users.columns: df_users['modules'] = "['Monitor']" # Fallback
-            st.dataframe(df_users[['username', 'name', 'role', 'modules']], use_container_width=True)
+            df = pd.DataFrame(users)
+            if 'modules' not in df.columns: df['modules'] = "['Monitor']"
+            st.dataframe(df[['username', 'name', 'role', 'modules']], use_container_width=True)
 
 # ======================================================
-# 6. ORQUESTRAÇÃO (ROTEAMENTO INTELIGENTE)
+# 6. ORQUESTRAÇÃO
 # ======================================================
 
 if check_password():
@@ -353,18 +305,14 @@ if check_password():
     user_modules = st.session_state.get("user_modules", ["Monitor"])
     
     if role == "admin":
-        # Admin vê TUDO
-        menu_options = ["Monitor", "Calculadora Financeira", "Backtest", "Usuários"]
         st.sidebar.title("Painel Admin")
+        opts = ["Monitor", "Calculadora Financeira", "Backtest", "Usuários"]
     else:
-        # Cliente vê apenas o que contratou
-        menu_options = user_modules
         st.sidebar.title("Menu")
+        opts = user_modules
     
-    # Seletor de Navegação
-    page = st.sidebar.radio("Ir para:", menu_options)
+    page = st.sidebar.radio("Ir para:", opts)
     
-    # Roteador
     if page == "Monitor": run_monitor_module(is_admin=(role=="admin"))
     elif page == "Calculadora Financeira": run_financial_calculator()
     elif page == "Backtest": run_backtest_module()
