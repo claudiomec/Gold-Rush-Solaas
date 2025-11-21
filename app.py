@@ -15,165 +15,157 @@ st.set_page_config(
 )
 
 # ======================================================
-# 2. CSS CORRIGIDO (Alto Contraste)
+# 2. CSS OTIMIZADO (Compacto)
 # ======================================================
 st.markdown("""
     <style>
-    /* Fundo Geral */
-    .stApp {
-        background-color: #0E1117;
-    }
+    .stApp { background-color: #0E1117; }
+    .block-container { padding-top: 1rem; padding-bottom: 1rem; }
+    div[data-testid="stVerticalBlock"] > div { gap: 0.5rem; }
     
-    /* --- BARRA LATERAL (SIDEBAR) --- */
-    section[data-testid="stSidebar"] {
-        background-color: #1C1E24; /* Cinza mais claro que o fundo */
-    }
+    /* Sidebar */
+    section[data-testid="stSidebar"] { background-color: #1C1E24; }
+    section[data-testid="stSidebar"] * { color: #FFFFFF !important; }
     
-    /* Forçar cor branca em TODOS os textos da sidebar */
-    section[data-testid="stSidebar"] h1, 
-    section[data-testid="stSidebar"] h2, 
-    section[data-testid="stSidebar"] h3, 
-    section[data-testid="stSidebar"] label, 
-    section[data-testid="stSidebar"] span, 
-    section[data-testid="stSidebar"] p,
-    section[data-testid="stSidebar"] div {
-        color: #FFFFFF !important;
-    }
+    /* Tipografia */
+    h1 { font-size: 1.8rem !important; color: #FFD700 !important; margin-bottom: 0 !important; }
+    h3 { font-size: 1.1rem !important; color: #FFD700 !important; }
     
-    /* Títulos Dourados (Gold Rush) */
-    h1, h2, h3 {
-        color: #FFD700 !important;
-    }
-    
-    /* Cards de Métricas */
+    /* Métricas */
     div[data-testid="stMetric"] {
         background-color: #262730;
         border: 1px solid #444;
-        border-radius: 8px;
+        border-radius: 6px;
         padding: 10px;
     }
-    div[data-testid="stMetricLabel"] {
-        color: #FFD700 !important; /* Label Dourado */
-    }
-    div[data-testid="stMetricValue"] {
-        color: #FFFFFF !important; /* Valor Branco */
-    }
+    div[data-testid="stMetricLabel"] { color: #FFD700 !important; font-size: 0.9rem !important; }
+    div[data-testid="stMetricValue"] { color: #FFFFFF !important; font-size: 1.4rem !important; }
     </style>
     """, unsafe_allow_html=True)
 
 # ======================================================
-# 3. BACKEND (Lógica de Negócio)
+# 3. BACKEND (Dados Brutos)
 # ======================================================
 @st.cache_data(ttl=3600)
-def get_data():
+def get_raw_data():
     end_date = datetime.now()
     start_date = end_date - timedelta(days=180)
     
-    # Baixando dados com auto_adjust para evitar erros
+    # Baixa WTI e Dólar
     wti = yf.download("CL=F", start=start_date, end=end_date, progress=False, auto_adjust=True)['Close']
     brl = yf.download("BRL=X", start=start_date, end=end_date, progress=False, auto_adjust=True)['Close']
     
     df = pd.concat([wti, brl], axis=1).dropna()
     df.columns = ['WTI', 'USD_BRL']
     
-    # Lógica Base (Sem Markup ainda)
-    df['PP_Intl_USD'] = (df['WTI'] * 0.014) + 0.35
-    df['Landed_Cost'] = df['PP_Intl_USD'] * df['USD_BRL'] * 1.12
+    # Preço Base Internacional (FOB - Free On Board)
+    # WTI * 0.014 + Spread ($0.35) = ~$1.20 USD/kg
+    df['PP_FOB_USD'] = (df['WTI'] * 0.014) + 0.35
     
     return df
 
 # ======================================================
-# 4. FRONTEND (Interface)
+# 4. FRONTEND (Calculadora SP)
 # ======================================================
 
-# --- SIDEBAR ---
+# --- SIDEBAR (Parâmetros de Custo) ---
 with st.sidebar:
-    st.title("🏭 Gold Rush SolaaS")
+    st.header("🏭 Gold Rush")
     st.markdown("---")
+    st.subheader("⚙️ Cost Build-up")
     
-    st.header("⚙️ Simulação")
+    # 1. Logística Internacional
+    st.caption("🚢 Logística Internacional")
+    ocean_freight = st.slider("Frete Marítimo (USD/ton)", 0, 300, 60, step=10)
     
-    # Inputs
-    markup_user = st.slider("Margem Distribuidor (%)", 5, 25, 13)
-    icms_user = st.selectbox("ICMS do Estado (%)", [18, 12, 7, 4])
+    # 2. Tributação
+    st.caption("🏛️ Tributação")
+    icms_user = st.selectbox("ICMS Destino (%)", [18, 12, 7, 4], index=0)
+    
+    # 3. Logística Física (R$/kg)
+    st.caption("🚚 Frete Interno (Santos -> Fábrica)")
+    freight_user = st.slider("Custo Rodoviário (R$/kg)", 0.00, 0.50, 0.15, step=0.01)
+    
+    # 4. Margem do Distribuidor
+    st.caption("💰 Margem Comercial")
+    margin_user = st.slider("Margem (%)", 0, 20, 10)
     
     st.markdown("---")
-    st.info("ℹ️ Ajuste os filtros acima para recalcular o preço final.")
-    st.caption("v2.2 - Contraste Ajustado")
+    st.caption(f"Config: Frete Intl ${ocean_freight} | ICMS {icms_user}%")
 
-# --- ÁREA PRINCIPAL ---
+# --- HEADER ---
 st.title("Monitor de Custo Industrial: Polipropileno")
-st.markdown("### 📊 Inteligência de Mercado em Tempo Real")
 
-# Carregamento
-with st.spinner('Conectando aos mercados globais...'):
+# Carregamento e Cálculo em Tempo Real
+with st.spinner('Calculando Landed Cost...'):
     try:
-        # Pega dados base
-        df = get_data()
+        df = get_raw_data()
         
-        # --- CÁLCULO DINÂMICO (Baseado na Sidebar) ---
-        # 1. Aplica ICMS "Por Dentro"
-        df['Price_Taxed'] = df['Landed_Cost'] / (1 - (icms_user/100))
-        # 2. Aplica Margem
-        df['PP_Price'] = df['Price_Taxed'] * (1 + (markup_user/100))
-        # 3. Calcula Tendência
+        # === LÓGICA DE NEGÓCIO REFINADA (Cost Build-up) ===
+        
+        # 1. Custo CFR (Cost and Freight) em USD
+        # Soma o frete internacional (convertido de ton para kg) ao preço FOB
+        df['CFR_USD'] = df['PP_FOB_USD'] + (ocean_freight / 1000)
+        
+        # 2. Nacionalização (Landed Cost BRL)
+        # Base CFR * Câmbio * 1.12 (II 12% + Taxas Portuárias sobre o valor CFR)
+        df['Landed_BRL'] = df['CFR_USD'] * df['USD_BRL'] * 1.12
+        
+        # 3. Custo Operacional Total (Produto Nacionalizado + Frete Interno)
+        df['Operational_Cost'] = df['Landed_BRL'] + freight_user
+        
+        # 4. Aplicação da Margem Comercial (Sobre o Custo Op)
+        df['Price_Net'] = df['Operational_Cost'] * (1 + (margin_user/100))
+        
+        # 5. Tributação Final (Gross Up - Cálculo "Por Dentro")
+        df['PP_Price'] = df['Price_Net'] / (1 - (icms_user/100))
+        
+        # 6. Tendência
         df['Trend'] = df['PP_Price'].rolling(window=7).mean()
         
-        # --- KPIs ---
-        current_price = df['PP_Price'].iloc[-1]
+        # === VISUALIZAÇÃO ===
         
-        # Variação % (7 dias)
+        current_price = df['PP_Price'].iloc[-1]
         variation_pct = (current_price / df['PP_Price'].iloc[-7] - 1) * 100
         
-        col1, col2, col3, col4 = st.columns(4)
-        
-        col1.metric("Preço Justo (R$/kg)", f"R$ {current_price:.2f}", f"{current_price - df['PP_Price'].iloc[-2]:.2f}")
-        col2.metric("Tendência (7d)", f"{variation_pct:.2f}%", delta_color="inverse")
-        col3.metric("Petróleo WTI", f"USD {df['WTI'].iloc[-1]:.2f}")
-        col4.metric("Dólar", f"R$ {df['USD_BRL'].iloc[-1]:.4f}")
+        # KPIs
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Preço Final (R$/kg)", f"R$ {current_price:.2f}", f"{current_price - df['PP_Price'].iloc[-2]:.2f}")
+        c2.metric("Tendência (7d)", f"{variation_pct:.2f}%", delta_color="inverse")
+        c3.metric("Frete Marítimo", f"USD {ocean_freight}/ton")
+        c4.metric("Dólar Base", f"R$ {df['USD_BRL'].iloc[-1]:.4f}")
 
-        # --- GRÁFICO ---
-        st.markdown("---")
-        st.subheader("📈 Evolução de Preço (6 Meses)")
-
-        fig, ax = plt.subplots(figsize=(12, 5))
-        # Configuração de Cores do Gráfico para bater com o tema
+        # Gráfico
+        fig, ax = plt.subplots(figsize=(10, 3))
         fig.patch.set_facecolor('#0E1117') 
         ax.set_facecolor('#0E1117')
         
-        ax.plot(df.index, df['PP_Price'], color='#888888', alpha=0.3, label='Spot Diário', linewidth=1)
-        ax.plot(df.index, df['Trend'], color='#FFD700', label='Tendência Gold Rush', linewidth=3)
+        ax.plot(df.index, df['PP_Price'], color='#666', alpha=0.3, label='Spot Calculado', linewidth=1)
+        ax.plot(df.index, df['Trend'], color='#FFD700', label='Tendência Gold Rush', linewidth=2.5)
         
-        # Eixos brancos
-        ax.tick_params(axis='x', colors='white')
-        ax.tick_params(axis='y', colors='white')
-        ax.spines['bottom'].set_color('#333')
-        ax.spines['top'].set_color('#333') 
-        ax.spines['right'].set_color('#333')
-        ax.spines['left'].set_color('#333')
-        
+        ax.tick_params(axis='both', colors='#AAA', labelsize=8)
+        for spine in ax.spines.values(): spine.set_color('#333')
         ax.grid(True, alpha=0.1)
-        ax.legend(facecolor='#1C1E24', labelcolor='white', framealpha=1)
+        ax.legend(facecolor='#1C1E24', labelcolor='white', fontsize=8)
         
-        st.pyplot(fig)
+        plt.tight_layout()
+        st.pyplot(fig, use_container_width=True)
 
-        # --- INSIGHT ---
+        # Insight
         if variation_pct > 0.5:
-            msg = "⚠️ TENDÊNCIA DE ALTA: Antecipe compras."
-            cor_borda = "#FF4B4B" # Vermelho
+            msg, cor = "⚠️ <b>ALTA:</b> Pressão de custos. Antecipe.", "#FF4B4B"
         elif variation_pct < -0.5:
-            msg = "✅ TENDÊNCIA DE BAIXA: Compre apenas o necessário."
-            cor_borda = "#00CC96" # Verde
+            msg, cor = "✅ <b>BAIXA:</b> Janela de oportunidade.", "#00CC96"
         else:
-            msg = "⚖️ ESTABILIDADE: Mantenha programação."
-            cor_borda = "#FFAA00" # Amarelo
+            msg, cor = "⚖️ <b>ESTÁVEL:</b> Mercado lateralizado.", "#FFAA00"
 
         st.markdown(f"""
-        <div style='background-color: #1C1E24; padding: 15px; border-radius: 10px; border-left: 5px solid {cor_borda};'>
-            <h4 style='color: white; margin:0;'>🔎 Análise Executiva</h4>
-            <p style='color: #CCC; margin: 5px 0 0 0;'>{msg}</p>
+        <div style='background-color: #1C1E24; padding: 10px 15px; border-radius: 8px; border-left: 4px solid {cor}; margin-top: 5px;'>
+            <p style='color: #DDD; margin: 0; font-size: 0.9rem;'>
+            {msg} Cálculo base: <b>CFR (Cost & Freight)</b> com frete marítimo de USD {ocean_freight}/ton.
+            </p>
         </div>
         """, unsafe_allow_html=True)
 
     except Exception as e:
-        st.error(f"Erro de conexão: {e}")
+        st.error(f"Erro de Cálculo: {e}")
