@@ -52,9 +52,16 @@ st.markdown("""
     div[data-testid="stMetricValue"] { color: #FFFFFF !important; font-size: 1.4rem !important; }
     
     /* Formulários e Inputs */
-    .stTextInput input { background-color: #1C1E24; color: white; border: 1px solid #444; }
+    .stTextInput input, .stSelectbox div[data-baseweb="select"] { 
+        background-color: #1C1E24 !important; 
+        color: white !important; 
+        border: 1px solid #444; 
+    }
     div[data-testid="stForm"] { border: 1px solid #FFD700; background-color: #16181E; padding: 20px; border-radius: 10px; }
     
+    /* Tabelas */
+    div[data-testid="stDataFrame"] { background-color: #1C1E24; }
+
     /* Esconder botões de rádio do menu */
     .stRadio > label { display: none; }
     </style>
@@ -68,52 +75,70 @@ st.markdown("""
 def get_db():
     """Conecta ao Firestore (Google Cloud DB) de forma robusta."""
     try:
-        # Verifica se já inicializou para não duplicar a instância
         if not firebase_admin._apps:
-            # Verifica se existe a configuração [firebase] nos segredos
             if "firebase" in st.secrets:
-                # Lógica Híbrida: Aceita tanto o formato novo (TOML Dict) quanto o antigo (JSON string)
                 if "text_key" in st.secrets["firebase"]:
-                    # Formato Antigo (JSON String)
                     key_dict = json.loads(st.secrets["firebase"]["text_key"])
                 else:
-                    # Formato Novo (TOML Nativo - Recomendado)
-                    # Converte o objeto de configuração do Streamlit para um dicionário Python puro
                     key_dict = dict(st.secrets["firebase"])
                 
-                # Cria a credencial
                 cred = credentials.Certificate(key_dict)
                 firebase_admin.initialize_app(cred)
                 return firestore.client()
         else:
             return firestore.client()
     except Exception as e:
-        # Se falhar, não quebra o app, apenas loga o erro (o login usará o backup local)
         print(f"Aviso de conexão DB: {e}")
         return None
 
 def authenticate_user(username, password):
     """Verifica usuário no Banco de Dados (Prioridade) ou no Backup Local."""
-    
-    # 1. Tentativa: Banco de Dados Real (Firestore)
     db = get_db()
     if db:
         try:
             users_ref = db.collection('users')
-            # Busca usuário e senha compatíveis
             query = users_ref.where('username', '==', username).where('password', '==', password).stream()
             for doc in query:
-                user_data = doc.to_dict()
-                return user_data # Sucesso: Retorna dados do usuário
+                return doc.to_dict()
         except Exception as e:
             print(f"Erro ao consultar Firestore: {e}")
     
-    # 2. Fallback: Arquivo de Segredos (Backup para quando o DB não estiver configurado)
     if "users" in st.secrets:
         if username in st.secrets["users"] and st.secrets["users"][username]["password"] == password:
             return st.secrets["users"][username]
-            
     return None
+
+def create_user_in_db(username, password, name, role):
+    """Cria um novo usuário no Firestore."""
+    db = get_db()
+    if not db:
+        return False, "Banco de dados não conectado. Configure o Firebase."
+    
+    try:
+        # Usa o username como ID do documento para evitar duplicatas e facilitar busca
+        doc_ref = db.collection('users').document(username)
+        doc_ref.set({
+            'username': username,
+            'password': password,
+            'name': name,
+            'role': role,
+            'created_at': firestore.SERVER_TIMESTAMP
+        })
+        return True, "Usuário criado com sucesso!"
+    except Exception as e:
+        return False, f"Erro ao criar: {str(e)}"
+
+def list_users_from_db():
+    """Lista todos os usuários cadastrados."""
+    db = get_db()
+    if not db:
+        return []
+    try:
+        users_ref = db.collection('users')
+        docs = users_ref.stream()
+        return [doc.to_dict() for doc in docs]
+    except:
+        return []
 
 # ======================================================
 # 3. SISTEMA DE LOGIN
@@ -124,7 +149,6 @@ def check_password():
     if st.session_state.get("password_correct", False):
         return True
 
-    # Layout Centralizado para Login
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown("<br><br>", unsafe_allow_html=True)
@@ -154,22 +178,16 @@ def logout():
     st.rerun()
 
 # ======================================================
-# 4. FUNÇÕES DE DADOS (Lógica de Negócio)
+# 4. FUNÇÕES DE DADOS
 # ======================================================
 @st.cache_data(ttl=3600)
 def get_market_data(days_back=180):
-    """Baixa dados do Yahoo Finance e prepara base."""
     end_date = datetime.now()
     start_date = end_date - timedelta(days=days_back)
-    
-    # Baixa dados com auto_adjust para evitar warnings
     wti = yf.download("CL=F", start=start_date, end=end_date, progress=False, auto_adjust=True)['Close']
     brl = yf.download("BRL=X", start=start_date, end=end_date, progress=False, auto_adjust=True)['Close']
-    
     df = pd.concat([wti, brl], axis=1).dropna()
     df.columns = ['WTI', 'USD_BRL']
-    
-    # Preço FOB Base (Proxy Internacional)
     df['PP_FOB_USD'] = (df['WTI'] * 0.014) + 0.35
     return df
 
@@ -179,8 +197,6 @@ def get_market_data(days_back=180):
 
 def run_monitor_module(is_admin=False):
     """Módulo 1: O Dashboard Principal."""
-    
-    # Sidebar Específica
     with st.sidebar:
         if is_admin:
             st.success(f"👋 Admin: {st.session_state['user_name']}")
@@ -188,8 +204,6 @@ def run_monitor_module(is_admin=False):
             st.info(f"🏭 Cliente: {st.session_state['user_name']}")
             
         st.header("⚙️ Cost Build-up")
-        st.caption("Simule seus custos reais:")
-        
         ocean_freight = st.slider("Frete Marítimo (USD/ton)", 0, 300, 60, step=10)
         icms_user = st.selectbox("ICMS Destino (%)", [18, 12, 7, 4], index=0)
         freight_user = st.slider("Frete Interno (R$/kg)", 0.00, 0.50, 0.15, step=0.01)
@@ -198,28 +212,18 @@ def run_monitor_module(is_admin=False):
         st.markdown("---")
         if st.button("Sair / Logout"): logout()
 
-    # Conteúdo Principal
     st.title("Monitor de Custo Industrial: Polipropileno")
     
     with st.spinner('Calculando Cost Build-up...'):
         df = get_market_data(days_back=180)
         
-        # --- LÓGICA DE CUSTO SP ---
-        # 1. CFR (Cost and Freight)
         df['CFR_USD'] = df['PP_FOB_USD'] + (ocean_freight / 1000)
-        # 2. Landed Cost (II + Taxas)
         df['Landed_BRL'] = df['CFR_USD'] * df['USD_BRL'] * 1.12
-        # 3. Custo Operacional (Com Frete Interno)
         df['Operational_Cost'] = df['Landed_BRL'] + freight_user
-        # 4. Preço Líquido (Com Margem)
         df['Price_Net'] = df['Operational_Cost'] * (1 + (margin_user/100))
-        # 5. Preço Final (Com ICMS por dentro)
         df['PP_Price'] = df['Price_Net'] / (1 - (icms_user/100))
-        
-        # Tendência
         df['Trend'] = df['PP_Price'].rolling(window=7).mean()
         
-        # Métricas
         current_price = df['PP_Price'].iloc[-1]
         variation_pct = (current_price / df['PP_Price'].iloc[-7] - 1) * 100
         
@@ -229,21 +233,17 @@ def run_monitor_module(is_admin=False):
         c3.metric("Frete Marítimo", f"USD {ocean_freight}/ton")
         c4.metric("Dólar Base", f"R$ {df['USD_BRL'].iloc[-1]:.4f}")
 
-        # Gráfico Matplotlib Otimizado
         fig, ax = plt.subplots(figsize=(10, 3))
         fig.patch.set_facecolor('#0E1117')
         ax.set_facecolor('#0E1117')
-        
         ax.plot(df.index, df['PP_Price'], color='#666', alpha=0.3, label='Spot Calculado', linewidth=1)
         ax.plot(df.index, df['Trend'], color='#FFD700', label='Tendência Gold Rush', linewidth=2.5)
-        
         ax.tick_params(axis='both', colors='#AAA', labelsize=8)
         for spine in ax.spines.values(): spine.set_color('#333')
         ax.grid(True, alpha=0.1)
         ax.legend(facecolor='#1C1E24', labelcolor='white', fontsize=8)
         st.pyplot(fig, use_container_width=True)
 
-        # Insight de Negócio
         if variation_pct > 0.5:
             msg, cor = "⚠️ <b>ALTA:</b> Pressão de custos detectada. Antecipe compras.", "#FF4B4B"
         elif variation_pct < -0.5:
@@ -259,90 +259,107 @@ def run_monitor_module(is_admin=False):
 
 def run_backtest_module():
     """Módulo 2: Validação de Fórmula (Apenas Admin)."""
-    
     with st.sidebar:
         st.header("🧪 Lab de Fórmula")
-        st.info("Ajuste os coeficientes para bater com o histórico.")
-        
         coef_wti = st.number_input("Coef. WTI", value=0.014, format="%.4f", step=0.001)
         coef_spread = st.number_input("Spread ($)", value=0.35, format="%.2f", step=0.05)
         coef_markup = st.number_input("Markup Brasil", value=1.45, format="%.2f", step=0.05)
         years_back = st.slider("Anos Históricos", 1, 5, 3)
-        
         st.markdown("---")
         if st.button("Sair / Logout", key='bt_logout'): logout()
 
     st.title("🧪 Laboratório de Backtest")
-    st.markdown("Valide a precisão da sua fórmula matemática comparando com o passado.")
-
     df = get_market_data(days_back=years_back*365)
-    
-    # Aplica a Fórmula de Teste
     df['PP_Theoretical'] = ((df['WTI'] * coef_wti) + coef_spread) * df['USD_BRL'] * coef_markup
     
     c1, c2 = st.columns([2, 1])
-    
     with c1:
-        st.subheader("Curva Teórica (O Modelo)")
-        
-        # Gráfico Teórico
+        st.subheader("Curva Teórica")
         fig, ax = plt.subplots(figsize=(10, 4))
         fig.patch.set_facecolor('#0E1117')
         ax.set_facecolor('#0E1117')
-        ax.plot(df.index, df['PP_Theoretical'], color='#FFD700', linewidth=2, label='Modelo')
-        
-        # Eixos de Data Formatados
+        ax.plot(df.index, df['PP_Theoretical'], color='#FFD700', linewidth=2)
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%Y'))
         ax.tick_params(axis='x', colors='#AAAAAA', rotation=45)
         ax.tick_params(axis='y', colors='#AAAAAA')
         for spine in ax.spines.values(): spine.set_color('#333')
-        ax.grid(True, alpha=0.1)
-        
         st.pyplot(fig, use_container_width=True)
-        
     with c2:
         st.subheader("Validação Real")
-        st.markdown("Faça upload do seu histórico de compras (CSV).")
-        uploaded_file = st.file_uploader("Arquivo CSV (Colunas: Data, Preco)", type="csv")
-        
+        uploaded_file = st.file_uploader("Upload CSV", type="csv")
         if uploaded_file and mean_absolute_percentage_error:
             try:
                 real_df = pd.read_csv(uploaded_file)
                 real_df['Data'] = pd.to_datetime(real_df['Data'])
                 real_df = real_df.set_index('Data').sort_index()
-                
-                # Cruzamento (Inner Join por Data)
                 comparison = df.join(real_df, how='inner').dropna()
-                comparison.rename(columns={'Preco': 'PP_Real'}, inplace=True)
-                
                 if not comparison.empty:
-                    mape = mean_absolute_percentage_error(comparison['PP_Real'], comparison['PP_Theoretical'])
-                    rmse = np.sqrt(mean_squared_error(comparison['PP_Real'], comparison['PP_Theoretical']))
-                    
-                    st.success("✅ Validação Concluída!")
-                    st.metric("Erro Médio (MAPE)", f"{mape*100:.1f}%")
+                    mape = mean_absolute_percentage_error(comparison['Preco'], comparison['PP_Theoretical'])
+                    rmse = np.sqrt(mean_squared_error(comparison['Preco'], comparison['PP_Theoretical']))
+                    st.metric("Erro (MAPE)", f"{mape*100:.1f}%")
                     st.metric("Erro (Reais)", f"R$ {rmse:.2f}")
-                    
-                    # Gráfico Comparativo
-                    fig_comp, ax_comp = plt.subplots(figsize=(10, 4))
-                    fig_comp.patch.set_facecolor('#0E1117')
-                    ax_comp.set_facecolor('#0E1117')
-                    
-                    ax_comp.plot(comparison.index, comparison['PP_Theoretical'], color='#FFD700', label='Teórico')
-                    ax_comp.plot(comparison.index, comparison['PP_Real'], color='#00FF00', label='Real', linestyle='--')
-                    
-                    ax_comp.xaxis.set_major_formatter(mdates.DateFormatter('%m/%Y'))
-                    ax_comp.tick_params(axis='x', colors='#AAA', rotation=45)
-                    ax_comp.tick_params(axis='y', colors='#AAA')
-                    ax_comp.legend(facecolor='#1C1E24', labelcolor='white')
-                    
-                    st.pyplot(fig_comp, use_container_width=True)
+                else: st.warning("Sem match de datas.")
+            except: st.error("Erro no CSV")
+
+def run_user_management_module():
+    """Módulo 3: Gestão de Acessos (Apenas Admin)."""
+    with st.sidebar:
+        st.header("👥 Gestão de Usuários")
+        st.info("Adicione novos clientes ou administradores.")
+        st.markdown("---")
+        if st.button("Sair / Logout", key='users_logout'): logout()
+
+    st.title("👥 Controle de Acessos")
+    
+    # Formulário de Cadastro
+    st.markdown("### Cadastrar Novo Usuário")
+    with st.form("new_user_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            new_username = st.text_input("Usuário (Login)", placeholder="Ex: cliente_abc")
+            new_password = st.text_input("Senha Provisória", type="password")
+        with col2:
+            new_name = st.text_input("Nome da Empresa / Pessoa", placeholder="Ex: Indústria ABC Ltda")
+            new_role = st.selectbox("Nível de Acesso", ["client", "admin"])
+        
+        submitted = st.form_submit_button("Criar Acesso", use_container_width=True)
+        
+        if submitted:
+            if new_username and new_password and new_name:
+                success, msg = create_user_in_db(new_username, new_password, new_name, new_role)
+                if success:
+                    st.success(msg)
                 else:
-                    st.warning("As datas do CSV não coincidem com o histórico.")
-            except Exception as e:
-                st.error(f"Erro ao processar CSV: {e}")
-        elif not mean_absolute_percentage_error:
-            st.error("Biblioteca scikit-learn ausente.")
+                    st.error(msg)
+            else:
+                st.warning("Por favor, preencha todos os campos.")
+
+    # Listagem de Usuários Existentes
+    st.markdown("---")
+    st.markdown("### Usuários Cadastrados (Firestore)")
+    
+    # Botão de refresh manual para não ficar lendo o banco toda hora
+    if st.button("🔄 Atualizar Lista"):
+        users_list = list_users_from_db()
+        if users_list:
+            # Transforma em DataFrame para exibir bonito
+            df_users = pd.DataFrame(users_list)
+            # Seleciona e renomeia colunas para exibição
+            if not df_users.empty:
+                display_cols = ['name', 'username', 'role']
+                # Garante que as colunas existem
+                cols_to_show = [c for c in display_cols if c in df_users.columns]
+                st.dataframe(
+                    df_users[cols_to_show].rename(columns={
+                        'name': 'Nome / Empresa',
+                        'username': 'Login',
+                        'role': 'Permissão'
+                    }), 
+                    use_container_width=True,
+                    hide_index=True
+                )
+        else:
+            st.info("Nenhum usuário encontrado no banco de dados (ou erro de conexão).")
 
 # ======================================================
 # 6. ORQUESTRAÇÃO (CONTROLLER)
@@ -352,15 +369,16 @@ if check_password():
     role = st.session_state["user_role"]
     
     if role == "admin":
-        # Admin vê menu de navegação
-        st.sidebar.title("Navegação Admin")
-        page = st.sidebar.radio("Módulo", ["Monitor de Mercado", "Laboratório de Backtest"])
+        st.sidebar.title("Painel Admin")
+        # Adicionei a nova opção no menu
+        page = st.sidebar.radio("Navegação", ["Monitor de Mercado", "Laboratório de Backtest", "Gestão de Usuários"])
         
         if page == "Monitor de Mercado":
             run_monitor_module(is_admin=True)
         elif page == "Laboratório de Backtest":
             run_backtest_module()
+        elif page == "Gestão de Usuários":
+            run_user_management_module()
             
     elif role == "client":
-        # Cliente vê apenas o Monitor (sem opção de navegar)
         run_monitor_module(is_admin=False)
