@@ -49,7 +49,6 @@ st.markdown("""
     div[data-testid="stForm"] { border: 1px solid #FFD700; background-color: #16181E; padding: 20px; border-radius: 10px; }
     div[data-testid="stDataFrame"] { background-color: #1C1E24; }
     .stRadio > label { display: none; }
-    .error-box { background-color: #440000; color: #FFAAAA; padding: 10px; border-radius: 5px; font-size: 0.8em; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -59,7 +58,7 @@ st.markdown("""
 
 @st.cache_resource
 def get_db():
-    """Conecta ao Firestore com limpeza automática de credenciais."""
+    """Conecta ao Firestore com limpeza SUPER agressiva de credenciais."""
     try:
         if firebase_admin._apps:
             return firestore.client()
@@ -69,46 +68,32 @@ def get_db():
             if "text_key" in st.secrets["firebase"]:
                 key_dict = json.loads(st.secrets["firebase"]["text_key"])
             else:
-                # Converte o objeto TOML para dict Python padrão
                 key_dict = dict(st.secrets["firebase"])
             
-            # --- AUTO-REPARO DA CHAVE PRIVADA ---
+            # --- SANITIZAÇÃO DA CHAVE (MODO "LAVA JATO") ---
             if "private_key" in key_dict:
                 pk = key_dict["private_key"]
                 
-                # 1. Remove espaços em branco extras no início/fim
-                pk = pk.strip()
+                # 1. Remove cabeçalhos antigos (para garantir que não fiquem duplicados)
+                pk = pk.replace("-----BEGIN PRIVATE KEY-----", "")
+                pk = pk.replace("-----END PRIVATE KEY-----", "")
                 
-                # 2. Substitui literais de quebra de linha (\n) por quebras reais
-                pk = pk.replace("\\n", "\n")
+                # 2. Remove TODA sujeira: quebras de linha literais (\n), reais, espaços e tabs
+                pk = pk.replace("\\n", "").replace("\n", "").replace(" ", "").replace("\t", "")
                 
-                # 3. Remove aspas duplas extras se o usuário colou errado
-                if pk.startswith('"') and pk.endswith('"'):
-                    pk = pk[1:-1]
+                # 3. Remove aspas que podem ter vindo do JSON
+                pk = pk.replace('"', '').replace("'", "")
                 
-                # 4. Garante que os cabeçalhos estão corretos
-                # (Alguns copiam sem o cabeçalho ou com formatação errada)
-                if "-----BEGIN PRIVATE KEY-----" not in pk:
-                    # Tenta formatar uma chave crua
-                    pk = "-----BEGIN PRIVATE KEY-----\n" + pk + "\n-----END PRIVATE KEY-----"
-                
-                # Salva a chave limpa
-                key_dict["private_key"] = pk
+                # 4. Reconstrói o formato PEM padrão limpo
+                key_dict["private_key"] = "-----BEGIN PRIVATE KEY-----\n" + pk + "\n-----END PRIVATE KEY-----"
 
             cred = credentials.Certificate(key_dict)
             firebase_admin.initialize_app(cred)
-            
-            if "db_error" in st.session_state:
-                del st.session_state["db_error"]
-                
             return firestore.client()
-        else:
-            st.session_state["db_error"] = "Segredo [firebase] não encontrado."
-            return None
+        return None
             
     except Exception as e:
-        st.session_state["db_error"] = str(e)
-        print(f"DB Connection Error: {e}") # Log no console do servidor
+        st.error(f"🔥 Erro na Chave do Firebase: {e}")
         return None
 
 def authenticate_user(username, password):
@@ -122,7 +107,6 @@ def authenticate_user(username, password):
         except Exception as e:
             print(f"Erro leitura DB: {e}")
     
-    # Backup Local
     if "users" in st.secrets:
         if username in st.secrets["users"] and st.secrets["users"][username]["password"] == password:
             return st.secrets["users"][username]
@@ -130,7 +114,7 @@ def authenticate_user(username, password):
 
 def create_user_in_db(username, password, name, role):
     db = get_db()
-    if not db: return False, "Banco Offline. Verifique erro na lateral."
+    if not db: return False, "Banco Offline. Verifique a chave privada."
     try:
         db.collection('users').document(username).set({
             'username': username, 'password': password, 'name': name, 'role': role,
@@ -177,6 +161,14 @@ def get_market_data(days_back=180):
     end = datetime.now(); start = end - timedelta(days=days_back)
     wti = yf.download("CL=F", start=start, end=end, progress=False, auto_adjust=True)['Close']
     brl = yf.download("BRL=X", start=start, end=end, progress=False, auto_adjust=True)['Close']
+    
+    # Validação de dados vazios para evitar erros
+    if wti.empty or brl.empty:
+        # Retorna um dataframe dummy para não quebrar a UI, mas avisa
+        st.warning("Atenção: Dados de mercado indisponíveis hoje. Usando simulação.")
+        idx = pd.date_range(start, end)
+        return pd.DataFrame({'WTI': [70]*len(idx), 'USD_BRL': [5.0]*len(idx), 'PP_FOB_USD': [1.2]*len(idx)}, index=idx)
+
     df = pd.concat([wti, brl], axis=1).dropna(); df.columns = ['WTI', 'USD_BRL']
     df['PP_FOB_USD'] = (df['WTI'] * 0.014) + 0.35
     return df
@@ -184,10 +176,7 @@ def get_market_data(days_back=180):
 def show_db_status():
     db = get_db()
     if db: st.caption("🟢 Database: Online")
-    else:
-        st.caption("🔴 Database: Offline")
-        if "db_error" in st.session_state:
-            with st.expander("Ver Erro"): st.markdown(f"<div class='error-box'>{st.session_state['db_error']}</div>", unsafe_allow_html=True)
+    else: st.caption("🔴 Database: Offline (Modo Backup)")
 
 def run_monitor_module(is_admin=False):
     with st.sidebar:
@@ -209,21 +198,22 @@ def run_monitor_module(is_admin=False):
         df['Final'] = (df['Landed'] + freight) * (1 + margin/100) / (1 - icms/100)
         df['Trend'] = df['Final'].rolling(7).mean()
         
-        curr = df['Final'].iloc[-1]; var = (curr/df['Final'].iloc[-7]-1)*100
-        c1,c2,c3,c4 = st.columns(4)
-        c1.metric("Preço Final", f"R$ {curr:.2f}", f"{curr-df['Final'].iloc[-2]:.2f}")
-        c2.metric("Tendência", f"{var:.2f}%", delta_color="inverse")
-        c3.metric("Frete Marítimo", f"USD {ocean}"); c4.metric("Dólar", f"R$ {df['USD_BRL'].iloc[-1]:.4f}")
-        
-        fig, ax = plt.subplots(figsize=(10, 3)); fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
-        ax.plot(df.index, df['Final'], color='#666', alpha=0.3); ax.plot(df.index, df['Trend'], color='#FFD700', lw=2.5)
-        ax.tick_params(colors='#AAA'); [s.set_color('#333') for s in ax.spines.values()]
-        st.pyplot(fig, use_container_width=True)
+        if not df.empty:
+            curr = df['Final'].iloc[-1]; var = (curr/df['Final'].iloc[-7]-1)*100
+            c1,c2,c3,c4 = st.columns(4)
+            c1.metric("Preço Final", f"R$ {curr:.2f}", f"{curr-df['Final'].iloc[-2]:.2f}")
+            c2.metric("Tendência", f"{var:.2f}%", delta_color="inverse")
+            c3.metric("Frete Marítimo", f"USD {ocean}"); c4.metric("Dólar", f"R$ {df['USD_BRL'].iloc[-1]:.4f}")
+            
+            fig, ax = plt.subplots(figsize=(10, 3)); fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
+            ax.plot(df.index, df['Final'], color='#666', alpha=0.3); ax.plot(df.index, df['Trend'], color='#FFD700', lw=2.5)
+            ax.tick_params(colors='#AAA'); [s.set_color('#333') for s in ax.spines.values()]
+            st.pyplot(fig, use_container_width=True)
 
-        if variation_pct > 0.5: msg, cor = "⚠️ <b>ALTA:</b> Pressão de custos.", "#FF4B4B"
-        elif variation_pct < -0.5: msg, cor = "✅ <b>BAIXA:</b> Oportunidade.", "#00CC96"
-        else: msg, cor = "⚖️ <b>ESTÁVEL:</b> Mercado lateral.", "#FFAA00"
-        st.markdown(f"<div style='background-color:#1C1E24;padding:10px;border-left:4px solid {cor};color:#DDD;font-size:0.9rem'>{msg}</div>", unsafe_allow_html=True)
+            if var > 0.5: msg, cor = "⚠️ <b>ALTA:</b> Pressão de custos.", "#FF4B4B"
+            elif var < -0.5: msg, cor = "✅ <b>BAIXA:</b> Oportunidade.", "#00CC96"
+            else: msg, cor = "⚖️ <b>ESTÁVEL:</b> Mercado lateral.", "#FFAA00"
+            st.markdown(f"<div style='background-color:#1C1E24;padding:10px;border-left:4px solid {cor};color:#DDD;font-size:0.9rem'>{msg}</div>", unsafe_allow_html=True)
 
 def run_backtest_module():
     with st.sidebar:
