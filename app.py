@@ -49,58 +49,70 @@ st.markdown("""
     div[data-testid="stForm"] { border: 1px solid #FFD700; background-color: #16181E; padding: 20px; border-radius: 10px; }
     div[data-testid="stDataFrame"] { background-color: #1C1E24; }
     .stRadio > label { display: none; }
-    
-    /* Estilo para mensagens de erro */
     .error-box { background-color: #440000; color: #FFAAAA; padding: 10px; border-radius: 5px; font-size: 0.8em; }
     </style>
     """, unsafe_allow_html=True)
 
 # ======================================================
-# 2. GERENCIADOR DE BANCO DE DADOS (COM DIAGNÓSTICO)
+# 2. GERENCIADOR DE BANCO DE DADOS (COM AUTO-REPARO)
 # ======================================================
 
 @st.cache_resource
 def get_db():
-    """Conecta ao Firestore e reporta erros."""
+    """Conecta ao Firestore com limpeza automática de credenciais."""
     try:
-        # Se já existe app inicializado, retorna o cliente
         if firebase_admin._apps:
             return firestore.client()
             
-        # Tenta inicializar
         if "firebase" in st.secrets:
-            # Detecta formato
+            # Carrega as configurações
             if "text_key" in st.secrets["firebase"]:
                 key_dict = json.loads(st.secrets["firebase"]["text_key"])
             else:
+                # Converte o objeto TOML para dict Python padrão
                 key_dict = dict(st.secrets["firebase"])
             
-            # Correção de quebras de linha
+            # --- AUTO-REPARO DA CHAVE PRIVADA ---
             if "private_key" in key_dict:
-                key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
-            
+                pk = key_dict["private_key"]
+                
+                # 1. Remove espaços em branco extras no início/fim
+                pk = pk.strip()
+                
+                # 2. Substitui literais de quebra de linha (\n) por quebras reais
+                pk = pk.replace("\\n", "\n")
+                
+                # 3. Remove aspas duplas extras se o usuário colou errado
+                if pk.startswith('"') and pk.endswith('"'):
+                    pk = pk[1:-1]
+                
+                # 4. Garante que os cabeçalhos estão corretos
+                # (Alguns copiam sem o cabeçalho ou com formatação errada)
+                if "-----BEGIN PRIVATE KEY-----" not in pk:
+                    # Tenta formatar uma chave crua
+                    pk = "-----BEGIN PRIVATE KEY-----\n" + pk + "\n-----END PRIVATE KEY-----"
+                
+                # Salva a chave limpa
+                key_dict["private_key"] = pk
+
             cred = credentials.Certificate(key_dict)
             firebase_admin.initialize_app(cred)
             
-            # Limpa erro anterior se conectar
             if "db_error" in st.session_state:
                 del st.session_state["db_error"]
                 
             return firestore.client()
         else:
-            st.session_state["db_error"] = "Segredo [firebase] não encontrado no TOML."
+            st.session_state["db_error"] = "Segredo [firebase] não encontrado."
             return None
             
     except Exception as e:
-        # Salva o erro para mostrar na tela
         st.session_state["db_error"] = str(e)
+        print(f"DB Connection Error: {e}") # Log no console do servidor
         return None
 
 def authenticate_user(username, password):
-    """Verifica usuário no DB ou Backup."""
     db = get_db()
-    
-    # 1. Tentativa Real (DB)
     if db:
         try:
             users_ref = db.collection('users')
@@ -110,7 +122,7 @@ def authenticate_user(username, password):
         except Exception as e:
             print(f"Erro leitura DB: {e}")
     
-    # 2. Fallback (Secrets Local)
+    # Backup Local
     if "users" in st.secrets:
         if username in st.secrets["users"] and st.secrets["users"][username]["password"] == password:
             return st.secrets["users"][username]
@@ -118,14 +130,14 @@ def authenticate_user(username, password):
 
 def create_user_in_db(username, password, name, role):
     db = get_db()
-    if not db: return False, "Banco Offline. Veja detalhes na lateral."
+    if not db: return False, "Banco Offline. Verifique erro na lateral."
     try:
         db.collection('users').document(username).set({
             'username': username, 'password': password, 'name': name, 'role': role,
             'created_at': firestore.SERVER_TIMESTAMP
         })
-        return True, "Usuário criado!"
-    except Exception as e: return False, str(e)
+        return True, "Usuário criado com sucesso!"
+    except Exception as e: return False, f"Erro: {str(e)}"
 
 def list_users_from_db():
     db = get_db()
@@ -154,10 +166,11 @@ def check_password():
 
 def logout():
     st.session_state["password_correct"] = False
+    st.session_state["user_role"] = None
     st.rerun()
 
 # ======================================================
-# 4. MÓDULOS E LÓGICA
+# 4. MÓDULOS
 # ======================================================
 @st.cache_data(ttl=3600)
 def get_market_data(days_back=180):
@@ -168,29 +181,25 @@ def get_market_data(days_back=180):
     df['PP_FOB_USD'] = (df['WTI'] * 0.014) + 0.35
     return df
 
-# Função auxiliar para mostrar status do DB na Sidebar
 def show_db_status():
     db = get_db()
-    if db:
-        st.caption("🟢 Database: Online")
+    if db: st.caption("🟢 Database: Online")
     else:
         st.caption("🔴 Database: Offline")
         if "db_error" in st.session_state:
-            with st.expander("Ver Detalhes do Erro"):
-                st.markdown(f"<div class='error-box'>{st.session_state['db_error']}</div>", unsafe_allow_html=True)
+            with st.expander("Ver Erro"): st.markdown(f"<div class='error-box'>{st.session_state['db_error']}</div>", unsafe_allow_html=True)
 
 def run_monitor_module(is_admin=False):
     with st.sidebar:
         if is_admin: st.success(f"Admin: {st.session_state['user_name']}")
         else: st.info(f"Cliente: {st.session_state['user_name']}")
-        show_db_status() # Mostra status aqui
-        
+        show_db_status()
         st.header("⚙️ Parâmetros")
         ocean = st.slider("Frete Marítimo", 0, 300, 60, 10)
         icms = st.selectbox("ICMS", [18, 12, 7, 4])
         freight = st.slider("Frete Interno", 0.0, 0.5, 0.15, 0.01)
         margin = st.slider("Margem", 0, 20, 10)
-        st.markdown("---"); st.button("Sair", on_click=logout)
+        st.markdown("---"); st.button("Sair", key='monlogout', on_click=logout)
 
     st.title("Monitor de Custo Industrial: Polipropileno")
     with st.spinner('Calculando...'):
@@ -211,6 +220,11 @@ def run_monitor_module(is_admin=False):
         ax.tick_params(colors='#AAA'); [s.set_color('#333') for s in ax.spines.values()]
         st.pyplot(fig, use_container_width=True)
 
+        if variation_pct > 0.5: msg, cor = "⚠️ <b>ALTA:</b> Pressão de custos.", "#FF4B4B"
+        elif variation_pct < -0.5: msg, cor = "✅ <b>BAIXA:</b> Oportunidade.", "#00CC96"
+        else: msg, cor = "⚖️ <b>ESTÁVEL:</b> Mercado lateral.", "#FFAA00"
+        st.markdown(f"<div style='background-color:#1C1E24;padding:10px;border-left:4px solid {cor};color:#DDD;font-size:0.9rem'>{msg}</div>", unsafe_allow_html=True)
+
 def run_backtest_module():
     with st.sidebar:
         st.header("🧪 Lab"); show_db_status()
@@ -218,9 +232,9 @@ def run_backtest_module():
         spr = st.number_input("Spread", value=0.35)
         mkp = st.number_input("Markup", value=1.45)
         yr = st.slider("Anos", 1, 5, 3)
-        st.markdown("---"); st.button("Sair", key='bk', on_click=logout)
+        st.markdown("---"); st.button("Sair", key='bklout', on_click=logout)
     
-    st.title("🧪 Laboratório de Backtest")
+    st.title("🧪 Backtest Lab")
     df = get_market_data(yr*365)
     df['Teorico'] = ((df['WTI']*wti)+spr)*df['USD_BRL']*mkp
     c1, c2 = st.columns([2, 1])
