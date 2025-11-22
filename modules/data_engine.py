@@ -40,7 +40,7 @@ def get_market_data(days_back=180):
             if data:
                 df = pd.DataFrame(data)
                 
-                # Normaliza nomes das colunas (Minúsculo do Banco -> Maiúsculo do App)
+                # Normaliza nomes das colunas
                 df = df.rename(columns={
                     'wti': 'WTI',
                     'usd_brl': 'USD_BRL',
@@ -48,13 +48,17 @@ def get_market_data(days_back=180):
                     'date': 'Date'
                 })
                 
-                # Ajusta o índice de data (Remove fuso horário para compatibilidade)
-                df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
+                # --- CORREÇÃO CRÍTICA PARA EXCEL (TZ-NAIVE) ---
+                # Converte para datetime
+                df['Date'] = pd.to_datetime(df['Date'])
+                
+                # Se tiver fuso horário (tz-aware), remove para evitar erro no Excel
+                if df['Date'].dt.tz is not None:
+                    df['Date'] = df['Date'].dt.tz_localize(None)
+                
                 df = df.set_index('Date').sort_index()
                 
-                # Garante que temos dados suficientes
                 if not df.empty:
-                    # print("✅ Dados carregados do Firestore!")
                     return df
 
     except Exception as e:
@@ -63,7 +67,6 @@ def get_market_data(days_back=180):
     # ---------------------------------------------------------
     # 2. PLANO B: YAHOO FINANCE (FALLBACK)
     # ---------------------------------------------------------
-    # (Código antigo mantido para segurança caso o robô falhe)
     
     wti = yf.download("CL=F", start=start_date, end=end_date, progress=False, auto_adjust=True)['Close']
     brl = yf.download("BRL=X", start=start_date, end=end_date, progress=False, auto_adjust=True)['Close']
@@ -74,6 +77,12 @@ def get_market_data(days_back=180):
 
     df = pd.concat([wti, brl], axis=1).dropna()
     df.columns = ['WTI', 'USD_BRL']
+    
+    # --- CORREÇÃO CRÍTICA PARA EXCEL (TZ-NAIVE) ---
+    # O Yahoo retorna datas com fuso. Removemos aqui.
+    if df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+        
     df['PP_FOB_USD'] = (df['WTI'] * 0.014) + 0.35
     
     return df
