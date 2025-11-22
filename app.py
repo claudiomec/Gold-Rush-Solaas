@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from modules import auth, database, data_engine, ui_components
+from modules import auth, database, data_engine, ui_components, report_generator
 import io
 
 # 1. Configuração Inicial
@@ -27,7 +27,11 @@ def view_monitor(is_admin):
         st.markdown("---")
 
     st.title("Monitor de Custo Industrial")
-    st.caption("Commodity: Polipropileno (Homopolímero)")
+    
+    # Layout de Título + Botão de PDF na mesma linha (usando colunas)
+    col_title, col_btn = st.columns([3, 1])
+    with col_title:
+        st.caption("Commodity: Polipropileno (Homopolímero)")
     
     with st.spinner('Calculando cenários...'):
         df_raw = data_engine.get_market_data()
@@ -35,13 +39,33 @@ def view_monitor(is_admin):
         
         curr = df['PP_Price'].iloc[-1]
         var = (curr/df['PP_Price'].iloc[-7]-1)*100
+        dollar_now = df['USD_BRL'].iloc[-1]
+        
+        # --- BOTÃO DE DOWNLOAD DO LAUDO ---
+        with col_btn:
+            # Gera o PDF em tempo real
+            if var > 0.5: sug = "Alta"
+            elif var < -0.5: sug = "Baixa"
+            else: sug = "Estavel"
+            
+            pdf_bytes = report_generator.generate_pdf_report(
+                df, curr, var, ocean, dollar_now, sug
+            )
+            
+            st.download_button(
+                label="📄 Baixar Laudo Oficial (PDF)",
+                data=pdf_bytes,
+                file_name="Laudo_Gold_Rush.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
         
         # KPIs
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Preço Final", f"R$ {curr:.2f}", f"{curr-df['PP_Price'].iloc[-2]:.2f}")
         c2.metric("Tendência (7d)", f"{var:.2f}%", delta_color="inverse")
         c3.metric("Frete Marítimo", f"USD {ocean}")
-        c4.metric("Dólar Base", f"R$ {df['USD_BRL'].iloc[-1]:.4f}")
+        c4.metric("Dólar Base", f"R$ {dollar_now:.4f}")
         
         # Novo Gráfico Interativo (Plotly)
         ui_components.render_price_chart(df)

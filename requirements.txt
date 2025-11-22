@@ -8,3 +8,4 @@ toml
 openpyxl
 streamlit-antd-components
 plotly
+fpdf
