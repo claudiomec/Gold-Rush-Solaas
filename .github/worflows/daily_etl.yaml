@@ -2,16 +2,15 @@ name: Daily Gold Rush ETL
 
 on:
   schedule:
-    # Roda todo dia às 09:00 UTC (06:00 Brasil)
-    - cron: '0 9 * * *'
-  workflow_dispatch: # Permite rodar manualmente clicando num botão (para testes)
+    - cron: '0 9 * * *' # Roda às 06:00 AM (Brasil)
+  workflow_dispatch:
 
 jobs:
   run-robot:
     runs-on: ubuntu-latest
     
     steps:
-      - name: 📥 Baixar Código (Checkout)
+      - name: 📥 Baixar Código
         uses: actions/checkout@v3
 
       - name: 🐍 Instalar Python
@@ -23,9 +22,16 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: 🤖 Rodar Robô ETL
+      - name: 🤖 Rodar Robô ETL + Alertas
         env:
-          # O segredo que vamos configurar no GitHub
+          # Credenciais do Banco de Dados
           FIREBASE_CREDENTIALS: ${{ secrets.FIREBASE_CREDENTIALS }}
+          
+          # Credenciais de E-mail (Novos Secrets)
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         run: |
           python scripts/daily_etl.py
+          
