@@ -3,6 +3,7 @@ import pandas as pd
 from modules import auth, database, data_engine, ui_components
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import io # Necessário para criar o arquivo Excel na memória
 
 # 1. Configuração Inicial
 st.set_page_config(
@@ -166,6 +167,49 @@ def view_backtest():
             except Exception as e:
                 st.error(f"Erro: {e}")
 
+def view_data_export():
+    """NOVO MÓDULO: Visualização e Exportação de Dados (Admin Only)"""
+    with st.sidebar:
+        st.header("💾 Dados Brutos")
+        st.info("Acesso Restrito: Admin")
+        st.button("Sair", key='logout_data', on_click=auth.logout)
+
+    st.title("💾 Data Warehouse (Exportação)")
+    st.markdown("Acesso direto aos dados históricos do robô ETL.")
+
+    # Filtro de Período
+    days = st.slider("Período de Análise (Dias)", 30, 365*5, 365, step=30)
+    
+    with st.spinner(f"Carregando registros dos últimos {days} dias..."):
+        # Busca dados do banco
+        df = data_engine.get_market_data(days_back=days)
+        
+        # Métricas Rápidas
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Registros", len(df))
+        c2.metric("Data Inicial", df.index.min().strftime('%d/%m/%Y') if not df.empty else "-")
+        c3.metric("Data Final", df.index.max().strftime('%d/%m/%Y') if not df.empty else "-")
+        
+        # Visualização da Tabela
+        st.markdown("### 📋 Visualização Tabular")
+        st.dataframe(df, use_container_width=True, height=400)
+        
+        # Botão de Exportação Excel
+        if not df.empty:
+            st.markdown("### 📥 Exportação")
+            
+            # Cria o arquivo Excel na memória RAM (buffer)
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                df.to_excel(writer, sheet_name='Market Data')
+                
+            st.download_button(
+                label="📄 Baixar Planilha Excel (.xlsx)",
+                data=buffer.getvalue(),
+                file_name=f"gold_rush_data_export.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
 # -------------------------------------------------------
 # FLUXO PRINCIPAL (Main Loop)
 # -------------------------------------------------------
@@ -176,7 +220,8 @@ if auth.check_session():
     
     if role == "admin":
         st.sidebar.title("Painel Admin")
-        opts = ["Monitor", "Calculadora Financeira", "Backtest", "Usuários"]
+        # Adicionada a opção "Dados (XLSX)" no menu do Admin
+        opts = ["Monitor", "Calculadora Financeira", "Backtest", "Usuários", "Dados (XLSX)"]
     else:
         st.sidebar.title("Menu")
         opts = user_modules
@@ -186,5 +231,6 @@ if auth.check_session():
     
     if page == "Monitor": view_monitor(is_admin=(role=="admin"))
     elif page == "Calculadora Financeira": view_calculator()
-    elif page == "Usuários": view_admin_users()
     elif page == "Backtest": view_backtest()
+    elif page == "Usuários": view_admin_users()
+    elif page == "Dados (XLSX)": view_data_export()
