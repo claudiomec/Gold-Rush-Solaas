@@ -57,6 +57,7 @@ def render_sidebar_menu(role, current_modules):
     
     if role == "admin":
         # Menu Completo de Admin
+        # CORREÇÃO: Removido format_func='title' que estava escondendo os textos
         selected = sac.menu([
             sac.MenuItem('Monitor', icon='graph-up-arrow'),
             sac.MenuItem('Calculadora', icon='calculator'),
@@ -67,7 +68,7 @@ def render_sidebar_menu(role, current_modules):
             sac.MenuItem('Usuários', icon='people'),
             sac.MenuItem(type='divider'),
             sac.MenuItem('Logout', icon='box-arrow-right'),
-        ], index=0, format_func='title', size='middle', color='yellow')
+        ], index=0, size='middle', color='yellow', open_all=True)
         
         # Mapeamento de nomes para compatibilidade com o app.py
         if selected == "Exportar Excel": return "Dados (XLSX)"
