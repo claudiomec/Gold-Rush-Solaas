@@ -6,3 +6,5 @@ scikit-learn
 firebase-admin
 toml
 openpyxl
+streamlit-antd-components
+plotly
