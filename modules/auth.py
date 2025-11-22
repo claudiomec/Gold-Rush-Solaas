@@ -3,66 +3,42 @@ from modules.database import get_db
 
 def authenticate(username, password):
     """
-    Verifica credenciais no Firestore (Prioridade) ou Secrets (Backup).
-    Retorna dict do usuário ou None.
+    Verifica credenciais e STATUS de verificação do e-mail.
     """
-    # 1. Tentativa Banco de Dados
+    
+    # 1. Tentativa Firestore (Principal)
     db = get_db()
     if db:
         try:
             users_ref = db.collection('users')
             query = users_ref.where('username', '==', username).where('password', '==', password).stream()
+            
             for doc in query:
-                return doc.to_dict()
+                user_data = doc.to_dict()
+                
+                # --- BLOQUEIO DE SEGURANÇA (KYC) ---
+                # Se verified existe e é False, bloqueia o acesso.
+                # Se verified não existe (usuários antigos), permite (True).
+                is_verified = user_data.get('verified', True)
+                
+                if is_verified is False:
+                    return {"error": "🔒 Conta não verificada. Por favor, clique no link enviado para seu e-mail."}
+                
+                return user_data
         except Exception as e:
-            print(f"Auth DB Error: {e}")
+            print(f"Auth Error: {e}")
     
-    # 2. Tentativa Backup Local (Secrets)
+    # 2. Tentativa Secrets (Backup Admin)
+    # O Admin de emergência (secrets.toml) sempre entra, pois não tem campo 'verified'
     if "users" in st.secrets and username in st.secrets["users"]:
         if st.secrets["users"][username]["password"] == password:
-            user_data = st.secrets["users"][username]
-            # Garante compatibilidade de estrutura se não tiver módulos definidos
-            if "modules" not in user_data:
-                user_data = dict(user_data)
-                user_data["modules"] = ["Monitor"]
-            return user_data
+            data = dict(st.secrets["users"][username])
+            if "modules" not in data: data["modules"] = ["Monitor"]
+            return data
             
     return None
 
-def login_screen():
-    """Renderiza a tela de login."""
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.image("https://cdn-icons-png.flaticon.com/512/2534/2534183.png", width=120)
-        st.markdown("<h1 style='text-align: center;'>🔐 Gold Rush Access</h1>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; color: #888;'>Inteligência de Mercado Industrial</p>", unsafe_allow_html=True)
-        
-        with st.form("login"):
-            user = st.text_input("Usuário")
-            password = st.text_input("Senha", type="password")
-            
-            if st.form_submit_button("Entrar", use_container_width=True):
-                user_data = authenticate(user, password)
-                if user_data:
-                    st.session_state.update({
-                        "password_correct": True,
-                        "user_role": user_data.get("role", "client"),
-                        "user_name": user_data.get("name", user),
-                        "user_modules": user_data.get("modules", ["Monitor"])
-                    })
-                    st.rerun()
-                else:
-                    st.error("Credenciais inválidas.")
-
-def check_session():
-    """Verifica se há sessão ativa. Se não, mostra login."""
-    if st.session_state.get("password_correct", False):
-        return True
-    login_screen()
-    return False
-
 def logout():
-    """Encerra sessão."""
     st.session_state["password_correct"] = False
+    st.session_state["user_role"] = None
     st.rerun()
