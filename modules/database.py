@@ -42,7 +42,6 @@ def create_user(username, email, password, name, role, modules):
         doc_ref = db.collection('users').document(username)
         if doc_ref.get().exists: return False, "Login de usuário já existe.", None
 
-        # Gera token único de validação
         token = str(uuid.uuid4())
 
         doc_ref.set({
@@ -52,7 +51,7 @@ def create_user(username, email, password, name, role, modules):
             'name': name,
             'role': role,
             'modules': modules,
-            'verified': False, # Trava de segurança inicial
+            'verified': False,
             'verification_token': token,
             'created_at': firestore.SERVER_TIMESTAMP
         })
@@ -60,33 +59,46 @@ def create_user(username, email, password, name, role, modules):
     except Exception as e:
         return False, f"Erro ao gravar: {str(e)}", None
 
-def verify_user_token(token):
+def update_user(username, name, role, modules):
     """
-    Busca usuário pelo token e ativa a conta (Verified = True).
+    Atualiza dados cadastrais de um usuário existente.
     """
     db = get_db()
-    if not db: return False, "Erro de conexão."
+    if not db: return False, "Banco Offline."
     
     try:
+        doc_ref = db.collection('users').document(username)
+        if not doc_ref.get().exists:
+            return False, "Usuário não encontrado."
+            
+        doc_ref.update({
+            'name': name,
+            'role': role,
+            'modules': modules,
+            'last_updated': firestore.SERVER_TIMESTAMP
+        })
+        return True, "Dados atualizados com sucesso!"
+    except Exception as e:
+        return False, f"Erro ao atualizar: {str(e)}"
+
+def verify_user_token(token):
+    db = get_db()
+    if not db: return False, "Erro de conexão."
+    try:
         users_ref = db.collection('users')
-        # Busca quem tem esse token pendente
         query = users_ref.where('verification_token', '==', token).stream()
-        
         user_doc = None
         for doc in query:
             user_doc = doc
             break
-            
         if user_doc:
-            # Ativa a conta e remove o token para não ser usado novamente
             users_ref.document(user_doc.id).update({
                 'verified': True,
                 'verification_token': firestore.DELETE_FIELD
             })
             return True, f"Sucesso! O usuário {user_doc.get('name')} foi validado e ativado."
         else:
-            return False, "Token inválido, expirado ou usuário já ativado."
-            
+            return False, "Token inválido."
     except Exception as e:
         return False, f"Erro na validação: {str(e)}"
 
@@ -95,4 +107,3 @@ def list_all_users():
     if not db: return []
     try: return [doc.to_dict() for doc in db.collection('users').stream()]
     except: return []
-    
