@@ -321,6 +321,7 @@ def render_sidebar_menu(role, current_modules):
                 sac.MenuItem('Exportar Excel', icon='file-earmark-excel'),
             ]),
             sac.MenuItem('Usuários', icon='people'),
+            sac.MenuItem('Planos', icon='credit-card'),
             sac.MenuItem(type='divider'),
             sac.MenuItem('Logout', icon='box-arrow-right'),
         ], index=0, size='middle', color='yellow', open_all=True)
@@ -342,12 +343,14 @@ def render_sidebar_menu(role, current_modules):
         if "Calculadora Financeira" in current_modules:
             menu_items.append(sac.MenuItem('Calculadora', icon='calculator'))
             
+        menu_items.append(sac.MenuItem('Planos', icon='credit-card'))
         menu_items.append(sac.MenuItem(type='divider'))
         menu_items.append(sac.MenuItem('Logout', icon='box-arrow-right'))
         
         selected = sac.menu(menu_items, index=0, size='middle', color='yellow')
         
         if selected == "Calculadora": return "Calculadora Financeira"
+        if selected == "Planos": return "Planos"
         if selected == "Logout": return "LOGOUT_ACTION"
         return selected
 

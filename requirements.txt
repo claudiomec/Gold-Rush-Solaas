@@ -10,3 +10,13 @@ streamlit-antd-components
 plotly
 fpdf
 bcrypt
+stripe
+pyotp
+qrcode
+slowapi
+redis
+sentry-sdk
+celery
+fastapi
+uvicorn
+pydantic

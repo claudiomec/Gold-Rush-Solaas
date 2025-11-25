@@ -255,3 +255,4 @@ def create_price_alert(user_id, target_price, direction="below"):
     
     return add_notification(user_id, title, message, type="warning", priority="high")
 
+

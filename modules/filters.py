@@ -123,3 +123,4 @@ def render_search_bar(placeholder="Buscar..."):
     """Renderiza uma barra de busca simples."""
     return st.text_input("🔍", placeholder=placeholder, key="global_search")
 
+

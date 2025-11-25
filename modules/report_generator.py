@@ -3,6 +3,26 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import tempfile
 import os
+import unicodedata
+
+def sanitize_text_for_latin1(text):
+    """Converte texto para formato compatível com latin1, removendo apenas caracteres não suportados."""
+    if not isinstance(text, str):
+        text = str(text)
+    # Remove apenas caracteres que não podem ser codificados em latin1
+    # (latin1 suporta acentos como á, é, í, ó, ú, ã, ç, etc.)
+    result = []
+    for char in text:
+        try:
+            char.encode('latin1')
+            result.append(char)
+        except UnicodeEncodeError:
+            # Caractere não suportado - tenta substituir por equivalente ASCII ou remove
+            # Remove emojis e caracteres especiais não-latin1
+            if ord(char) < 256:  # Caracteres básicos sempre incluídos
+                result.append(char)
+            # Caso contrário, simplesmente omite o caractere
+    return ''.join(result)
 
 class PDFReport(FPDF):
     def __init__(self):
@@ -34,7 +54,8 @@ class PDFReport(FPDF):
         self.set_y(-15)
         self.set_font('Arial', 'I', 8)
         self.set_text_color(100, 100, 100)
-        self.cell(0, 10, f'Pagina {self.page_no()} | Gold Rush Analytics - Relatorio Gerado Automaticamente', 0, 0, 'C')
+        page_text = sanitize_text_for_latin1(f'Pagina {self.page_no()} | Gold Rush Analytics - Relatorio Gerado Automaticamente')
+        self.cell(0, 10, page_text, 0, 0, 'C')
     
     def colored_box(self, x, y, w, h, r, g, b, text="", font_size=12, bold=False):
         """Cria uma caixa colorida com texto."""
@@ -90,15 +111,15 @@ def generate_pdf_report(df, current_price, trend_pct, ocean, dollar, suggestion)
     if trend_pct > 0.5:
         pdf.set_text_color(255, 82, 82)  # Vermelho
         status = "ALTA - Recomendamos antecipar compras"
-        icon = "📈"
+        icon = "[^]"
     elif trend_pct < -0.5:
         pdf.set_text_color(0, 230, 118)  # Verde
         status = "BAIXA - Oportunidade de compra"
-        icon = "📉"
+        icon = "[v]"
     else:
         pdf.set_text_color(255, 165, 0)  # Laranja
         status = "ESTAVEL - Manter programacao"
-        icon = "➡️"
+        icon = "[->]"
     
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 8, f"{icon} {status}", ln=1)
@@ -186,7 +207,9 @@ def generate_pdf_report(df, current_price, trend_pct, ocean, dollar, suggestion)
     pdf.set_xy(12, pdf.get_y() + 3)
     pdf.set_font('Arial', 'I', 8)
     pdf.set_text_color(100, 100, 100)
-    pdf.multi_cell(186, 4, "Este relatorio e gerado automaticamente com base em modelos estatisticos e dados de mercado publicos. A Gold Rush Analytics nao se responsabiliza por decisoes comerciais tomadas exclusivamente com base nestes dados. Sempre consulte profissionais qualificados para decisoes importantes.")
+    disclaimer_text = sanitize_text_for_latin1("Este relatorio e gerado automaticamente com base em modelos estatisticos e dados de mercado publicos. A Gold Rush Analytics nao se responsabiliza por decisoes comerciais tomadas exclusivamente com base nestes dados. Sempre consulte profissionais qualificados para decisoes importantes.")
+    pdf.multi_cell(186, 4, disclaimer_text)
     
     # Retorna o binário do PDF
-    return pdf.output(dest='S').encode('latin-1')
+    # pdf.output(dest='S') já retorna bytes, não precisa de encode adicional
+    return pdf.output(dest='S')

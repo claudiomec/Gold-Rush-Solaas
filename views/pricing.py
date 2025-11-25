@@ -2,7 +2,9 @@
 View de Planos e Preços
 """
 import streamlit as st
-from modules import ui_components
+import pandas as pd
+from modules import ui_components, subscription, plan_limits
+from modules.subscription import PlanType
 
 def view_pricing():
     """Página de planos e preços."""
@@ -35,16 +37,20 @@ def view_pricing():
                     <li>5 relatórios/mês</li>
                     <li>Suporte por email</li>
                 </ul>
-                <button style="
-                    width: 100%;
-                    padding: 12px;
-                    background: linear-gradient(135deg, #FFD700, #FFA500);
-                    color: #000;
-                    border: none;
-                    border-radius: 8px;
-                    font-weight: 600;
-                    cursor: pointer;
-                ">Começar Grátis</button>
+        """, unsafe_allow_html=True)
+        
+        if st.button("Começar Grátis", key="btn_free", use_container_width=True):
+            user_id = st.session_state.get('user_name')
+            if user_id:
+                ok, msg, sub_id = subscription.create_subscription(user_id, PlanType.FREE)
+                if ok:
+                    st.success("✅ Plano Free ativado!")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {msg}")
+            else:
+                st.warning("Você precisa estar logado para alterar seu plano.")
+        st.markdown("""
             </div>
         """, unsafe_allow_html=True)
     
@@ -83,16 +89,35 @@ def view_pricing():
                     <li>20 relatórios/mês</li>
                     <li>Suporte prioritário</li>
                 </ul>
-                <button style="
-                    width: 100%;
-                    padding: 12px;
-                    background: linear-gradient(135deg, #FFD700, #FFA500);
-                    color: #000;
-                    border: none;
-                    border-radius: 8px;
-                    font-weight: 600;
-                    cursor: pointer;
-                ">Assinar Agora</button>
+        """, unsafe_allow_html=True)
+        
+        if st.button("Assinar Agora", key="btn_starter", use_container_width=True):
+            user_id = st.session_state.get('user_name')
+            if user_id:
+                try:
+                    from modules import payment
+                    from modules.subscription import PlanType
+                    base_url = "https://gold-rush.streamlit.app"  # TODO: Pegar de config
+                    success_url = f"{base_url}/?checkout=success&session_id={{CHECKOUT_SESSION_ID}}"
+                    cancel_url = f"{base_url}/?checkout=cancel"
+                    
+                    ok, msg, checkout_url = payment.create_checkout_session(
+                        user_id=user_id,
+                        plan_type=PlanType.STARTER,
+                        success_url=success_url,
+                        cancel_url=cancel_url
+                    )
+                    
+                    if ok and checkout_url:
+                        st.success("💳 Redirecionando para checkout...")
+                        st.markdown(f"[Clique aqui para continuar o pagamento]({checkout_url})")
+                    else:
+                        st.warning(f"⚠️ {msg}")
+                except Exception as e:
+                    st.warning(f"⚠️ Integração com gateway de pagamento em desenvolvimento. Erro: {e}")
+            else:
+                st.warning("Você precisa estar logado para assinar um plano.")
+        st.markdown("""
             </div>
         """, unsafe_allow_html=True)
     
@@ -119,16 +144,35 @@ def view_pricing():
                     <li>API access</li>
                     <li>Suporte prioritário</li>
                 </ul>
-                <button style="
-                    width: 100%;
-                    padding: 12px;
-                    background: linear-gradient(135deg, #FFD700, #FFA500);
-                    color: #000;
-                    border: none;
-                    border-radius: 8px;
-                    font-weight: 600;
-                    cursor: pointer;
-                ">Assinar Agora</button>
+        """, unsafe_allow_html=True)
+        
+        if st.button("Assinar Agora", key="btn_starter", use_container_width=True):
+            user_id = st.session_state.get('user_name')
+            if user_id:
+                try:
+                    from modules import payment
+                    from modules.subscription import PlanType
+                    base_url = "https://gold-rush.streamlit.app"  # TODO: Pegar de config
+                    success_url = f"{base_url}/?checkout=success&session_id={{CHECKOUT_SESSION_ID}}"
+                    cancel_url = f"{base_url}/?checkout=cancel"
+                    
+                    ok, msg, checkout_url = payment.create_checkout_session(
+                        user_id=user_id,
+                        plan_type=PlanType.STARTER,
+                        success_url=success_url,
+                        cancel_url=cancel_url
+                    )
+                    
+                    if ok and checkout_url:
+                        st.success("💳 Redirecionando para checkout...")
+                        st.markdown(f"[Clique aqui para continuar o pagamento]({checkout_url})")
+                    else:
+                        st.warning(f"⚠️ {msg}")
+                except Exception as e:
+                    st.warning(f"⚠️ Integração com gateway de pagamento em desenvolvimento. Erro: {e}")
+            else:
+                st.warning("Você precisa estar logado para assinar um plano.")
+        st.markdown("""
             </div>
         """, unsafe_allow_html=True)
     
@@ -154,22 +198,42 @@ def view_pricing():
                     <li>Suporte dedicado</li>
                     <li>SLA garantido</li>
                 </ul>
-                <button style="
-                    width: 100%;
-                    padding: 12px;
-                    background: linear-gradient(135deg, #FFD700, #FFA500);
-                    color: #000;
-                    border: none;
-                    border-radius: 8px;
-                    font-weight: 600;
-                    cursor: pointer;
-                ">Falar com Vendas</button>
+        """, unsafe_allow_html=True)
+        
+        if st.button("Falar com Vendas", key="btn_enterprise", use_container_width=True):
+            st.info("📧 Entre em contato: vendas@goldrush.com")
+        st.markdown("""
             </div>
         """, unsafe_allow_html=True)
     
     st.markdown("<br><br>", unsafe_allow_html=True)
     
+    # Informações do plano atual
+    user_id = st.session_state.get('user_name')
+    if user_id:
+        try:
+            plan_info = plan_limits.get_user_plan_info(user_id)
+            st.markdown("### 📦 Seu Plano Atual")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Plano", plan_info['plan_name'])
+            with col2:
+                reports_remaining = plan_info['usage']['reports_remaining']
+                if reports_remaining is not None:
+                    st.metric("Relatórios Restantes", reports_remaining)
+                else:
+                    st.metric("Relatórios", "Ilimitado")
+            with col3:
+                max_days = plan_info['limits'].get('max_history_days')
+                if max_days:
+                    st.metric("Histórico", f"{max_days} dias")
+                else:
+                    st.metric("Histórico", "Completo")
+        except Exception as e:
+            st.warning(f"Erro ao carregar informações do plano: {e}")
+    
     # Comparação de recursos
+    st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("### 📊 Comparação de Recursos")
     
     comparison_data = {

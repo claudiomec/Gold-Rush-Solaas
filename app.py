@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
-from modules import auth, database, data_engine, ui_components, report_generator, email_service, analytics, notifications, filters, help
+import logging
+from modules import auth, database, data_engine, ui_components, report_generator, email_service, analytics, notifications, filters, help, subscription, plan_limits
 try:
     from views import pricing
 except ImportError:
@@ -10,6 +11,9 @@ from datetime import datetime
 import io
 import re
 import time
+
+# Configuração de logging
+logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="Gold Rush Analytics", page_icon="🏭", layout="wide", initial_sidebar_state="expanded")
 ui_components.load_custom_css()
@@ -49,8 +53,24 @@ def view_monitor(is_admin):
     with col_t: 
         st.markdown("**Commodity:** <span style='color: #FFD700; font-weight: 600;'>Polipropileno</span>", unsafe_allow_html=True)
     
+    # Verifica limites do plano
+    user_id = st.session_state.get('user_name')
+    if user_id:
+        plan_info = plan_limits.get_user_plan_info(user_id)
+        max_days = plan_info['limits'].get('max_history_days')
+        if max_days:
+            st.info(f"📦 Plano {plan_info['plan_name']}: Acessando últimos {max_days} dias de dados")
+    
     with st.spinner('⚙️ Calculando métricas...'):
-        df_raw = data_engine.get_market_data()
+        # Aplica limite de histórico baseado no plano
+        days_back = 180  # Padrão
+        if user_id:
+            plan_info = plan_limits.get_user_plan_info(user_id)
+            max_days = plan_info['limits'].get('max_history_days')
+            if max_days:
+                days_back = min(days_back, max_days)
+        
+        df_raw = data_engine.get_market_data(days_back=days_back)
         df = data_engine.calculate_cost_buildup(df_raw, ocean, freight, icms, margin)
         
         # Aplica filtros rápidos
@@ -64,16 +84,30 @@ def view_monitor(is_admin):
         var = (curr/df['PP_Price'].iloc[-7]-1)*100 if len(df) >= 7 else 0
         
         with col_b:
-            sug = "Alta" if var > 0.5 else "Baixa" if var < -0.5 else "Estavel"
-            pdf = report_generator.generate_pdf_report(df, curr, var, ocean, df['USD_BRL'].iloc[-1], sug)
-            st.download_button(
-                "📄 Baixar Laudo PDF", 
-                pdf, 
-                "Laudo_Gold_Rush.pdf", 
-                "application/pdf", 
-                use_container_width=True,
-                help="Baixe o relatório completo em PDF"
-            )
+            # Verifica limite de relatórios
+            user_id = st.session_state.get('user_name')
+            can_generate, error_msg, reports_remaining = plan_limits.check_reports_limit(user_id) if user_id else (True, None, None)
+            
+            if can_generate:
+                sug = "Alta" if var > 0.5 else "Baixa" if var < -0.5 else "Estavel"
+                pdf = report_generator.generate_pdf_report(df, curr, var, ocean, df['USD_BRL'].iloc[-1], sug)
+                help_text = "Baixe o relatório completo em PDF"
+                if reports_remaining is not None:
+                    help_text += f" ({reports_remaining} restantes este mês)"
+                st.download_button(
+                    "📄 Baixar Laudo PDF", 
+                    pdf, 
+                    "Laudo_Gold_Rush.pdf", 
+                    "application/pdf", 
+                    use_container_width=True,
+                    help=help_text
+                )
+            else:
+                st.error(f"🚫 {error_msg}")
+                if user_id:
+                    plan_info = plan_limits.get_user_plan_info(user_id)
+                    if plan_info['plan_type'] != 'enterprise':
+                        st.info("💡 Faça upgrade do seu plano para gerar mais relatórios!")
         
         # Métricas modernas
         c1, c2, c3, c4 = st.columns(4)
@@ -114,6 +148,57 @@ def view_monitor(is_admin):
         
         st.markdown("<br>", unsafe_allow_html=True)
         
+        # Métricas de Confiança (NOVO)
+        try:
+            confidence_metrics = data_engine.calculate_price_confidence(df, curr)
+            if confidence_metrics:
+                st.markdown("### 🎯 Confiança nos Dados")
+                conf_col1, conf_col2, conf_col3 = st.columns(3)
+                
+                with conf_col1:
+                    confidence_score = confidence_metrics.get('confidence_score', 0)
+                    confidence_color = "green" if confidence_score >= 0.8 else "orange" if confidence_score >= 0.6 else "red"
+                    ui_components.render_modern_card(
+                        "Score de Confiança",
+                        f"{confidence_score:.1%}",
+                        confidence_metrics.get('recommendation', ''),
+                        "🎯",
+                        confidence_color
+                    )
+                
+                with conf_col2:
+                    freshness = confidence_metrics.get('data_freshness_days', 'N/A')
+                    freshness_text = f"{freshness} dias" if isinstance(freshness, int) else "N/A"
+                    ui_components.render_modern_card(
+                        "Atualidade dos Dados",
+                        freshness_text,
+                        "Dias desde última atualização",
+                        "📅",
+                        "blue"
+                    )
+                
+                with conf_col3:
+                    completeness = confidence_metrics.get('data_completeness', 0)
+                    ui_components.render_modern_card(
+                        "Completude",
+                        f"{completeness:.1%}",
+                        "Percentual de dados completos",
+                        "📊",
+                        "gold"
+                    )
+                
+                # Recomendação
+                if confidence_score < 0.6:
+                    st.warning(f"⚠️ **Atenção:** {confidence_metrics.get('recommendation', '')}")
+                elif confidence_score >= 0.8:
+                    st.success(f"✅ {confidence_metrics.get('recommendation', '')}")
+                else:
+                    st.info(f"ℹ️ {confidence_metrics.get('recommendation', '')}")
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+        except Exception as e:
+            logger.warning(f"Erro ao calcular métricas de confiança: {e}")
+        
         # Opção de visualização avançada
         show_advanced = st.checkbox("📊 Mostrar gráfico avançado com métricas", value=False)
         
@@ -123,6 +208,51 @@ def view_monitor(is_admin):
             ui_components.render_price_chart(df, show_advanced=True)
         
         st.markdown("<br>", unsafe_allow_html=True)
+        
+        # Análise de Sensibilidade (NOVO)
+        with st.expander("🔬 Análise de Sensibilidade dos Parâmetros"):
+            st.markdown("**Veja como cada parâmetro afeta o preço final**")
+            
+            if st.button("Calcular Análise de Sensibilidade", use_container_width=True):
+                with st.spinner("Calculando impacto de cada parâmetro..."):
+                    try:
+                        base_params = {
+                            'ocean_freight': ocean,
+                            'freight_internal': freight,
+                            'icms': icms,
+                            'margin': margin
+                        }
+                        
+                        ranges = {
+                            'ocean_freight': (-10, +10),
+                            'icms': (-2, +2),
+                            'margin': (-2, +2),
+                            'freight_internal': (-0.05, +0.05)
+                        }
+                        
+                        sensitivity_df = data_engine.sensitivity_analysis(base_params, ranges)
+                        
+                        if not sensitivity_df.empty:
+                            st.markdown("#### 📈 Impacto no Preço Final")
+                            st.dataframe(
+                                sensitivity_df[['parameter', 'change', 'price_impact', 'price_impact_pct', 'sensitivity_rank']],
+                                use_container_width=True,
+                                hide_index=True
+                            )
+                            
+                            # Gráfico de sensibilidade
+                            if 'price_impact_pct' in sensitivity_df.columns:
+                                st.bar_chart(
+                                    sensitivity_df.groupby('parameter')['sensitivity_rank'].max().sort_values(ascending=False),
+                                    height=300
+                                )
+                            
+                            st.info("💡 **Interpretação:** Valores maiores indicam maior impacto no preço final quando o parâmetro varia.")
+                        else:
+                            st.warning("Não foi possível calcular a análise de sensibilidade no momento.")
+                    except Exception as e:
+                        st.error(f"Erro ao calcular análise de sensibilidade: {e}")
+        
         ui_components.render_insight_card(var)
 
 def view_calculator():
@@ -419,7 +549,16 @@ def view_dashboard():
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("### 📈 Tendência de Preços")
     
-    df = data_engine.get_market_data(90)  # Últimos 90 dias
+    # Aplica limite de histórico baseado no plano
+    user_id = st.session_state.get('user_name')
+    days_back = 90  # Padrão
+    if user_id:
+        plan_info = plan_limits.get_user_plan_info(user_id)
+        max_days = plan_info['limits'].get('max_history_days')
+        if max_days:
+            days_back = min(days_back, max_days)
+    
+    df = data_engine.get_market_data(days_back=days_back)
     if not df.empty and 'PP_Price' in df.columns:
         ui_components.render_price_chart(df)
     else:
@@ -438,7 +577,17 @@ def view_data_export():
         st.markdown("---")
         period, trend = filters.render_quick_filters()
     
-    df = data_engine.get_market_data(365)
+    # Aplica limite de histórico baseado no plano
+    user_id = st.session_state.get('user_name')
+    days_back = 365  # Padrão
+    if user_id:
+        plan_info = plan_limits.get_user_plan_info(user_id)
+        max_days = plan_info['limits'].get('max_history_days')
+        if max_days:
+            days_back = min(days_back, max_days)
+            st.info(f"📦 Plano {plan_info['plan_name']}: Acessando últimos {max_days} dias de dados")
+    
+    df = data_engine.get_market_data(days_back=days_back)
     
     # Aplica filtros
     df = filters.apply_quick_filters(df, period, trend)
@@ -603,6 +752,40 @@ else:
         # Renderiza sino de notificações
         notifications.render_notification_bell()
         
+        # Informações do plano do usuário
+        user_id = st.session_state.get('user_name')
+        if user_id:
+            try:
+                plan_info = plan_limits.get_user_plan_info(user_id)
+                plan_name = plan_info['plan_name']
+                plan_type = plan_info['plan_type']
+                
+                # Cor baseada no plano
+                if plan_type == 'enterprise':
+                    plan_color = "#FFD700"
+                elif plan_type == 'professional':
+                    plan_color = "#00E676"
+                elif plan_type == 'starter':
+                    plan_color = "#448AFF"
+                else:
+                    plan_color = "#B8C5D6"
+                
+                st.markdown(f"""
+                    <div style="
+                        background: linear-gradient(135deg, rgba(26, 35, 50, 0.95), rgba(20, 27, 45, 0.95));
+                        border: 1px solid {plan_color};
+                        border-radius: 10px;
+                        padding: 0.75rem;
+                        margin-bottom: 1rem;
+                        text-align: center;
+                    ">
+                        <div style="color: {plan_color}; font-weight: 600; font-size: 0.9rem;">📦 Plano {plan_name}</div>
+                        {f'<div style="color: #B8C5D6; font-size: 0.75rem; margin-top: 0.25rem;">{plan_info["usage"]["reports_remaining"]} relatórios restantes</div>' if plan_info["usage"]["reports_remaining"] is not None else ''}
+                    </div>
+                """, unsafe_allow_html=True)
+            except Exception as e:
+                logger.warning(f"Erro ao buscar informações do plano: {e}")
+        
         pg = ui_components.render_sidebar_menu(role, st.session_state.get("user_modules", []))
 
     # Verifica se é página de notificações via query params
@@ -615,3 +798,8 @@ else:
     elif pg == "Usuários": view_admin_users()
     elif pg == "Dados (XLSX)": view_data_export()
     elif pg == "Backtest": view_backtest()
+    elif pg == "Planos":
+        if pricing:
+            pricing.view_pricing()
+        else:
+            st.error("Módulo de planos não disponível")
