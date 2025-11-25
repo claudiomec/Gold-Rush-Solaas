@@ -1,0 +1,45 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Push to GitHub",
+      "type": "shell",
+      "command": "./push_to_github.sh",
+      "args": [
+        "${input:commitMessage}"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Push to GitHub (Auto Message)",
+      "type": "shell",
+      "command": "./push_to_github.sh",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "commitMessage",
+      "type": "promptString",
+      "description": "Digite a mensagem do commit:",
+      "default": "feat: Atualização automática"
+    }
+  ]
+}
+
