@@ -9,59 +9,94 @@ def hash_password(password):
     """Gera hash SHA-256 da senha."""
     return hashlib.sha256(password.encode()).hexdigest()
 
-@st.cache_resource
-def get_db():
-    """Conecta ao Firestore com auto-reparo de chave."""
+def clear_db_cache():
+    """
+    Limpa o cache do Streamlit para get_db().
+    Útil quando há problemas de conexão que precisam ser resolvidos.
+    """
     try:
-        # Se já está inicializado, retorna o cliente existente
+        get_db.cache_clear()
+    except Exception:
+        pass
+
+def _get_db_internal():
+    """
+    Função interna que faz a conexão real.
+    Separada para permitir limpeza de cache se necessário.
+    """
+    # Se já está inicializado, retorna o cliente existente
+    try:
         if firebase_admin._apps: 
             return firestore.client()
-        
-        # Verifica se as credenciais estão configuradas
+    except Exception:
+        pass
+    
+    # Verifica se as credenciais estão configuradas
+    try:
         if "firebase" not in st.secrets:
             print("⚠️ Aviso: Credenciais do Firebase não encontradas em st.secrets")
             return None
-        
-        # Tenta carregar as credenciais
-        try:
-            if "text_key" in st.secrets["firebase"]:
-                key_dict = json.loads(st.secrets["firebase"]["text_key"])
-            else:
-                key_dict = dict(st.secrets["firebase"])
-        except json.JSONDecodeError as e:
-            print(f"❌ Erro ao fazer parse do JSON das credenciais: {e}")
-            return None
-        
-        # Sanitiza a chave privada se existir
-        if "private_key" in key_dict:
-            try:
-                pk = key_dict["private_key"]
-                # Remove headers e formatação existente
-                pk = pk.replace("-----BEGIN PRIVATE KEY-----", "").replace("-----END PRIVATE KEY-----", "")
-                # Remove quebras de linha e espaços
-                pk = pk.replace("\\n", "").replace("\n", "").replace(" ", "").replace("\t", "").replace('"', '').replace("'", "")
-                # Reaplica o formato correto
-                key_dict["private_key"] = "-----BEGIN PRIVATE KEY-----\n" + pk + "\n-----END PRIVATE KEY-----"
-            except Exception as e:
-                print(f"❌ Erro ao processar chave privada: {e}")
-                return None
-
-        # Tenta criar as credenciais e inicializar
-        try:
-            cred = credentials.Certificate(key_dict)
-            firebase_admin.initialize_app(cred)
-            return firestore.client()
-        except ValueError as e:
-            # Erro comum: chave privada inválida ou formato incorreto
-            print(f"❌ Erro de validação das credenciais Firebase: {e}")
-            print("💡 Verifique se a chave privada está no formato correto no st.secrets")
-            return None
-        except Exception as e:
-            print(f"❌ Erro ao inicializar Firebase: {e}")
-            return None
-            
     except Exception as e:
-        print(f"❌ Erro inesperado na conexão com o banco: {e}")
+        print(f"⚠️ Erro ao acessar st.secrets: {e}")
+        return None
+    
+    # Tenta carregar as credenciais
+    key_dict = None
+    try:
+        if "text_key" in st.secrets["firebase"]:
+            key_dict = json.loads(st.secrets["firebase"]["text_key"])
+        else:
+            key_dict = dict(st.secrets["firebase"])
+    except json.JSONDecodeError as e:
+        print(f"❌ Erro ao fazer parse do JSON das credenciais: {e}")
+        return None
+    except Exception as e:
+        print(f"❌ Erro ao carregar credenciais: {e}")
+        return None
+    
+    if not key_dict:
+        print("⚠️ Aviso: Credenciais do Firebase vazias")
+        return None
+    
+    # Sanitiza a chave privada se existir
+    if "private_key" in key_dict:
+        try:
+            pk = str(key_dict["private_key"])
+            # Remove headers e formatação existente
+            pk = pk.replace("-----BEGIN PRIVATE KEY-----", "").replace("-----END PRIVATE KEY-----", "")
+            # Remove quebras de linha e espaços
+            pk = pk.replace("\\n", "").replace("\n", "").replace(" ", "").replace("\t", "").replace('"', '').replace("'", "")
+            # Reaplica o formato correto
+            key_dict["private_key"] = "-----BEGIN PRIVATE KEY-----\n" + pk + "\n-----END PRIVATE KEY-----"
+        except Exception as e:
+            print(f"❌ Erro ao processar chave privada: {e}")
+            return None
+
+    # Tenta criar as credenciais e inicializar
+    try:
+        cred = credentials.Certificate(key_dict)
+        firebase_admin.initialize_app(cred)
+        return firestore.client()
+    except ValueError as e:
+        # Erro comum: chave privada inválida ou formato incorreto
+        print(f"❌ Erro de validação das credenciais Firebase: {e}")
+        print("💡 Verifique se a chave privada está no formato correto no st.secrets")
+        return None
+    except Exception as e:
+        print(f"❌ Erro ao inicializar Firebase: {e}")
+        return None
+
+@st.cache_resource
+def get_db():
+    """
+    Conecta ao Firestore com auto-reparo de chave.
+    NUNCA levanta exceções - sempre retorna None em caso de erro.
+    """
+    try:
+        return _get_db_internal()
+    except Exception as e:
+        # Garantia final: nunca levantar exceção
+        print(f"❌ Erro crítico na conexão com o banco (capturado): {e}")
         return None
 
 def create_user(username, email, password, name, role, modules):
