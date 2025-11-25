@@ -1,33 +1,55 @@
 {
-  "name": "Python 3",
-  // Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-  "image": "mcr.microsoft.com/devcontainers/python:1-3.11-bookworm",
+  "name": "Gold Rush Analytics - Python Streamlit",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.11-bullseye",
+  
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
   "customizations": {
-    "codespaces": {
-      "openFiles": [
-        "README.md",
-        "app.py"
-      ]
-    },
     "vscode": {
-      "settings": {},
       "extensions": [
         "ms-python.python",
-        "ms-python.vscode-pylance"
-      ]
+        "ms-python.vscode-pylance",
+        "ms-python.black-formatter",
+        "ms-toolsai.jupyter",
+        "ms-python.isort",
+        "charliermarsh.ruff",
+        "ms-python.debugpy"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.formatting.provider": "black",
+        "python.linting.enabled": true,
+        "python.linting.pylintEnabled": false,
+        "python.linting.ruffEnabled": true,
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.organizeImports": true
+        },
+        "files.exclude": {
+          "**/__pycache__": true,
+          "**/*.pyc": true
+        }
+      }
     }
   },
-  "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements.txt ] && pip3 install --user -r requirements.txt; pip3 install --user streamlit; echo '✅ Packages installed and Requirements met'",
-  "postAttachCommand": {
-    "server": "streamlit run app.py --server.enableCORS false --server.enableXsrfProtection false"
-  },
+
+  "postCreateCommand": "bash .devcontainer/postCreate.sh",
+  
+  "forwardPorts": [8501],
   "portsAttributes": {
     "8501": {
-      "label": "Application",
-      "onAutoForward": "openPreview"
+      "label": "Streamlit App",
+      "onAutoForward": "notify"
     }
   },
-  "forwardPorts": [
-    8501
-  ]
+
+  "remoteUser": "vscode",
+  
+  "remoteEnv": {
+    "STREAMLIT_SERVER_PORT": "8501",
+    "STREAMLIT_SERVER_ADDRESS": "0.0.0.0"
+  }
 }

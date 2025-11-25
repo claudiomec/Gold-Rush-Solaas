@@ -27,11 +27,12 @@ env/
 .venv
 
 # IDE
-.vscode/
+# .vscode/ - Mantido para compartilhar configurações do Codespaces
 .idea/
 *.swp
 *.swo
 *~
+.vscode/settings.json.local
 
 # OS
 .DS_Store
