@@ -3,6 +3,11 @@ import json
 import uuid
 import firebase_admin
 from firebase_admin import credentials, firestore
+import hashlib
+
+def hash_password(password):
+    """Gera hash SHA-256 da senha."""
+    return hashlib.sha256(password.encode()).hexdigest()
 
 @st.cache_resource
 def get_db():
@@ -33,13 +38,23 @@ def create_user(username, email, password, name, role, modules):
     db = get_db()
     if not db: return False, "Banco Offline.", None
     try:
-        # Tenta usar o username como ID para unicidade
+        # BUG FIX: Verificar unicidade pelo campo 'username', não apenas pelo ID do documento
+        # Isso evita duplicatas caso o ID divirja do username (ex: após troca de email)
+        dup_check = db.collection('users').where('username', '==', username).limit(1).stream()
+        for _ in dup_check:
+            return False, "Login já existe.", None
+
+        # Tenta usar o username como ID para unicidade (ainda útil para organização)
         doc_ref = db.collection('users').document(username)
-        if doc_ref.get().exists: return False, "Login já existe.", None
+        # Se o ID já existir (e não foi pego pelo query acima por inconsistência), também bloqueia
+        if doc_ref.get().exists: return False, "Login já existe (ID).", None
 
         token = str(uuid.uuid4())
+        # BUG FIX: Hash da senha antes de salvar
+        hashed_pw = hash_password(password)
+        
         doc_ref.set({
-            'username': username, 'email': email, 'password': password, 'name': name,
+            'username': username, 'email': email, 'password': hashed_pw, 'name': name,
             'role': role, 'modules': modules, 'verified': False, 'verification_token': token,
             'created_at': firestore.SERVER_TIMESTAMP
         })

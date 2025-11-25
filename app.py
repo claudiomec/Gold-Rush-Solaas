@@ -38,8 +38,19 @@ def view_monitor(is_admin):
     
     with st.spinner('Calculando...'):
         df = data_engine.calculate_cost_buildup(data_engine.get_market_data(), ocean, freight, icms, margin)
-        curr = df['PP_Price'].iloc[-1]; var = (curr/df['PP_Price'].iloc[-7]-1)*100
         
+        curr = df['PP_Price'].iloc[-1]
+        
+        # BUG FIX: Cálculo de variação baseado em tempo (7 dias) e não em linhas fixas
+        try:
+            target_date = df.index[-1] - pd.Timedelta(days=7)
+            # Busca o índice mais próximo da data alvo
+            idx = df.index.get_indexer([target_date], method='nearest')[0]
+            past_price = df['PP_Price'].iloc[idx]
+            var = (curr / past_price - 1) * 100
+        except Exception:
+            var = 0.0
+            
         with col_b:
             sug = "Alta" if var > 0.5 else "Baixa" if var < -0.5 else "Estavel"
             pdf = report_generator.generate_pdf_report(df, curr, var, ocean, df['USD_BRL'].iloc[-1], sug)

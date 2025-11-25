@@ -208,13 +208,26 @@ def check_and_send_alerts(db, df):
     # Calcula preço final para os últimos dias
     df['Final_Price'] = df.apply(calculate_standard_price, axis=1)
     
+    # Garantir que é datetime
+    df['Date'] = pd.to_datetime(df['Date'])
+    
     current_price = df['Final_Price'].iloc[-1]
-    price_7d_ago = df['Final_Price'].iloc[-8] # D-7
+    current_date = df['Date'].iloc[-1]
+    
+    # BUG FIX: Comparação temporal robusta (7 dias)
+    try:
+        target_date = current_date - timedelta(days=7)
+        # Encontra a linha com a data mais próxima
+        closest_idx = (df['Date'] - target_date).abs().idxmin()
+        price_7d_ago = df.loc[closest_idx, 'Final_Price']
+    except Exception as e:
+        print(f"Erro ao calcular data anterior: {e}")
+        price_7d_ago = current_price
     
     variation = (current_price / price_7d_ago) - 1
     
-    print(f"   Preço Hoje: R$ {current_price:.2f}")
-    print(f"   Preço 7d atrás: R$ {price_7d_ago:.2f}")
+    print(f"   Preço Hoje ({current_date.date()}): R$ {current_price:.2f}")
+    print(f"   Preço Ref ({target_date.date()}): R$ {price_7d_ago:.2f}")
     print(f"   Variação: {variation*100:.2f}% (Threshold: {ALERT_THRESHOLD*100}%)")
 
     if abs(variation) >= ALERT_THRESHOLD:

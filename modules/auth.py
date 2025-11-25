@@ -1,5 +1,5 @@
 import streamlit as st
-from modules.database import get_db
+from modules.database import get_db, hash_password
 
 def authenticate(username, password):
     """
@@ -11,7 +11,10 @@ def authenticate(username, password):
     if db:
         try:
             users_ref = db.collection('users')
-            query = users_ref.where('username', '==', username).where('password', '==', password).stream()
+            # Hash da senha para comparar com o banco
+            hashed_pw = hash_password(password)
+            
+            query = users_ref.where('username', '==', username).where('password', '==', hashed_pw).stream()
             
             for doc in query:
                 user_data = doc.to_dict()
