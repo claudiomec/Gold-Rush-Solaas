@@ -3,6 +3,7 @@ import json
 import uuid
 import firebase_admin
 from firebase_admin import credentials, firestore
+from modules.security import hash_password, check_password, is_password_hashed
 
 @st.cache_resource
 def get_db():
@@ -37,9 +38,12 @@ def create_user(username, email, password, name, role, modules):
         doc_ref = db.collection('users').document(username)
         if doc_ref.get().exists: return False, "Login já existe.", None
 
+        # Hash da senha antes de armazenar
+        password_hash = hash_password(password)
+        
         token = str(uuid.uuid4())
         doc_ref.set({
-            'username': username, 'email': email, 'password': password, 'name': name,
+            'username': username, 'email': email, 'password': password_hash, 'name': name,
             'role': role, 'modules': modules, 'verified': False, 'verification_token': token,
             'created_at': firestore.SERVER_TIMESTAMP
         })

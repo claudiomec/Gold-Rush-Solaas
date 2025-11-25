@@ -9,3 +9,4 @@ openpyxl
 streamlit-antd-components
 plotly
 fpdf
+bcrypt

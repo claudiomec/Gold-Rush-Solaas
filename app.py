@@ -1,6 +1,12 @@
 import streamlit as st
 import pandas as pd
-from modules import auth, database, data_engine, ui_components, report_generator, email_service
+from modules import auth, database, data_engine, ui_components, report_generator, email_service, analytics, notifications, filters, help
+try:
+    from views import pricing
+except ImportError:
+    # Fallback se views não existir
+    pricing = None
+from datetime import datetime
 import io
 import re
 import time
@@ -32,6 +38,10 @@ def view_monitor(is_admin):
         freight = st.slider("🚚 Frete Interno", 0.0, 0.5, 0.15, 0.01, help="Taxa de frete interno")
         margin = st.slider("💼 Margem (%)", 0, 20, 10, help="Margem de lucro desejada")
         st.markdown("---")
+        
+        # Filtros rápidos
+        period, trend = filters.render_quick_filters()
+        st.markdown("---")
         st.button("🚪 Sair", key='lo1', on_click=auth.logout, use_container_width=True)
 
     st.title("📊 Monitor de Custo Industrial")
@@ -40,7 +50,16 @@ def view_monitor(is_admin):
         st.markdown("**Commodity:** <span style='color: #FFD700; font-weight: 600;'>Polipropileno</span>", unsafe_allow_html=True)
     
     with st.spinner('⚙️ Calculando métricas...'):
-        df = data_engine.calculate_cost_buildup(data_engine.get_market_data(), ocean, freight, icms, margin)
+        df_raw = data_engine.get_market_data()
+        df = data_engine.calculate_cost_buildup(df_raw, ocean, freight, icms, margin)
+        
+        # Aplica filtros rápidos
+        df = filters.apply_quick_filters(df, period, trend)
+        
+        if df.empty:
+            st.warning("⚠️ Nenhum dado encontrado com os filtros selecionados.")
+            return
+        
         curr = df['PP_Price'].iloc[-1]
         var = (curr/df['PP_Price'].iloc[-7]-1)*100 if len(df) >= 7 else 0
         
@@ -94,7 +113,15 @@ def view_monitor(is_admin):
             )
         
         st.markdown("<br>", unsafe_allow_html=True)
-        ui_components.render_price_chart(df)
+        
+        # Opção de visualização avançada
+        show_advanced = st.checkbox("📊 Mostrar gráfico avançado com métricas", value=False)
+        
+        if show_advanced:
+            ui_components.render_advanced_metrics_chart(df)
+        else:
+            ui_components.render_price_chart(df, show_advanced=True)
+        
         st.markdown("<br>", unsafe_allow_html=True)
         ui_components.render_insight_card(var)
 
@@ -244,6 +271,160 @@ def view_admin_users():
             us = database.list_all_users()
             if us: st.dataframe(pd.DataFrame(us)[['username', 'name', 'email', 'verified', 'role']], use_container_width=True)
 
+def view_dashboard():
+    """Dashboard de métricas e analytics do usuário."""
+    with st.sidebar:
+        st.markdown("### 📊 Dashboard")
+        st.markdown("---")
+        st.button("🚪 Sair", key='lo_dash', on_click=auth.logout, use_container_width=True)
+    
+    st.title("📊 Dashboard de Métricas")
+    
+    col_title, col_help = st.columns([4, 1])
+    with col_title:
+        st.markdown("**Visão geral do valor entregue e métricas de uso**")
+    with col_help:
+        if st.button("❓ Ajuda", use_container_width=True):
+            st.session_state['show_help'] = True
+    
+    if st.session_state.get('show_help', False):
+        with st.expander("📚 Guia e FAQ", expanded=True):
+            help.render_quick_guide()
+            st.markdown("---")
+            help.render_faq()
+            if st.button("Fechar Ajuda"):
+                st.session_state['show_help'] = False
+                st.rerun()
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Busca métricas do usuário
+    metrics = analytics.get_user_metrics()
+    usage_stats = analytics.get_usage_stats()
+    
+    if not metrics:
+        st.warning("⚠️ Não foi possível carregar métricas no momento.")
+        return
+    
+    # KPIs Principais
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        ui_components.render_modern_card(
+            "Preço Atual",
+            f"R$ {metrics.get('current_price', 0):.2f}",
+            "Última cotação",
+            "💰",
+            "gold"
+        )
+    
+    with col2:
+        change_pct = metrics.get('price_change_pct', 0)
+        change_icon = "📈" if change_pct > 0 else "📉" if change_pct < 0 else "➡️"
+        change_color = "red" if change_pct > 0 else "green" if change_pct < 0 else "blue"
+        ui_components.render_modern_card(
+            "Variação Total",
+            f"{change_pct:+.2f}%",
+            f"Nos últimos {metrics.get('total_days_tracked', 0)} dias",
+            change_icon,
+            change_color
+        )
+    
+    with col3:
+        ui_components.render_modern_card(
+            "Preço Médio",
+            f"R$ {metrics.get('average_price', 0):.2f}",
+            "Média histórica",
+            "📊",
+            "blue"
+        )
+    
+    with col4:
+        ui_components.render_modern_card(
+            "Dados Rastreados",
+            f"{metrics.get('data_points', 0)}",
+            "Pontos de dados",
+            "📈",
+            "green"
+        )
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Análise de Economia
+    st.markdown("### 💰 Análise de Economia Potencial")
+    
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        fair_price = data_engine.get_fair_price_snapshot()
+        current_price = metrics.get('current_price', 0)
+        
+        if current_price > 0 and fair_price > 0:
+            savings_data = analytics.calculate_savings_potential(current_price, fair_price, 1000)
+            
+            if savings_data['status'] == 'savings':
+                ui_components.render_modern_card(
+                    "🟢 Economia Potencial",
+                    f"R$ {savings_data['savings']:,.2f}",
+                    f"Por tonelada ({savings_data['savings_pct']:.2f}% abaixo do justo)",
+                    "✅",
+                    "green"
+                )
+            elif savings_data['status'] == 'loss':
+                ui_components.render_modern_card(
+                    "🔴 Perda Potencial",
+                    f"R$ {savings_data['savings']:,.2f}",
+                    f"Por tonelada ({savings_data['savings_pct']:.2f}% acima do justo)",
+                    "⚠️",
+                    "red"
+                )
+            else:
+                ui_components.render_modern_card(
+                    "⚖️ Preço Equilibrado",
+                    "R$ 0,00",
+                    "Alinhado com o mercado justo",
+                    "✓",
+                    "blue"
+                )
+    
+    with col_b:
+        st.markdown("#### 📈 Insights")
+        if metrics.get('price_change_pct', 0) > 5:
+            st.success("💡 **Oportunidade:** Preços em alta significativa. Considere antecipar compras.")
+        elif metrics.get('price_change_pct', 0) < -5:
+            st.info("💡 **Oportunidade:** Preços em queda. Pode ser um bom momento para comprar.")
+        else:
+            st.info("💡 **Mercado estável.** Mantenha sua programação normal de compras.")
+    
+    # Estatísticas de Uso
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("### 📊 Estatísticas de Uso")
+    
+    col_u1, col_u2, col_u3 = st.columns(3)
+    
+    with col_u1:
+        st.metric("Relatórios Gerados", usage_stats.get('reports_generated', 0))
+    
+    with col_u2:
+        last_access = usage_stats.get('last_access', datetime.now())
+        if isinstance(last_access, datetime):
+            st.metric("Último Acesso", last_access.strftime("%d/%m/%Y"))
+        else:
+            st.metric("Último Acesso", "Hoje")
+    
+    with col_u3:
+        st.metric("Total de Sessões", usage_stats.get('total_sessions', 0))
+    
+    # Gráfico de tendência
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("### 📈 Tendência de Preços")
+    
+    df = data_engine.get_market_data(90)  # Últimos 90 dias
+    if not df.empty and 'PP_Price' in df.columns:
+        ui_components.render_price_chart(df)
+    else:
+        st.info("Dados de mercado não disponíveis no momento.")
+
 def view_backtest():
     st.title("🧪 Lab"); 
     with st.sidebar: st.button("Sair", key='lo4', on_click=auth.logout)
@@ -252,9 +433,35 @@ def view_backtest():
 
 def view_data_export():
     st.title("💾 Dados"); 
-    with st.sidebar: st.button("Sair", key='lo5', on_click=auth.logout)
+    with st.sidebar: 
+        st.button("Sair", key='lo5', on_click=auth.logout)
+        st.markdown("---")
+        period, trend = filters.render_quick_filters()
+    
     df = data_engine.get_market_data(365)
+    
+    # Aplica filtros
+    df = filters.apply_quick_filters(df, period, trend)
+    
+    # Filtros avançados
+    st.markdown("<br>", unsafe_allow_html=True)
+    df = filters.render_data_filters(df)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
     st.dataframe(df, use_container_width=True)
+    
+    # Estatísticas
+    if not df.empty:
+        st.markdown("### 📊 Estatísticas")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total de Registros", len(df))
+        with col2:
+            if 'PP_Price' in df.columns:
+                st.metric("Preço Médio", f"R$ {df['PP_Price'].mean():.2f}")
+        with col3:
+            if isinstance(df.index, pd.DatetimeIndex):
+                st.metric("Período", f"{df.index.min().strftime('%d/%m/%Y')} - {df.index.max().strftime('%d/%m/%Y')}")
 
 # --- MAIN ---
 if not st.session_state.get("password_correct", False):
@@ -393,9 +600,16 @@ else:
                 </div>
             """, unsafe_allow_html=True)
         
+        # Renderiza sino de notificações
+        notifications.render_notification_bell()
+        
         pg = ui_components.render_sidebar_menu(role, st.session_state.get("user_modules", []))
 
-    if pg == "LOGOUT_ACTION": auth.logout()
+    # Verifica se é página de notificações via query params
+    if st.query_params.get("page") == "notifications":
+        notifications.render_notifications_page()
+    elif pg == "LOGOUT_ACTION": auth.logout()
+    elif pg == "Dashboard": view_dashboard()
     elif pg == "Monitor": view_monitor(role=="admin")
     elif pg == "Calculadora Financeira": view_calculator()
     elif pg == "Usuários": view_admin_users()

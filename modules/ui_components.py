@@ -351,11 +351,46 @@ def render_sidebar_menu(role, current_modules):
         if selected == "Logout": return "LOGOUT_ACTION"
         return selected
 
-def render_price_chart(df):
-    """Renderiza gráfico interativo moderno com Plotly."""
+def render_price_chart(df, show_advanced=True):
+    """Renderiza gráfico interativo moderno com Plotly e métricas avançadas."""
+    
+    # Calcula métricas avançadas se solicitado
+    if show_advanced and 'PP_Price' in df.columns and len(df) > 7:
+        df = df.copy()
+        df['MA_7'] = df['PP_Price'].rolling(window=7).mean()
+        df['MA_30'] = df['PP_Price'].rolling(window=30).mean() if len(df) > 30 else None
+        df['Std'] = df['PP_Price'].rolling(window=7).std()
+        df['Upper_Band'] = df['MA_7'] + (df['Std'] * 1.5)
+        df['Lower_Band'] = df['MA_7'] - (df['Std'] * 1.5)
     
     # Cria o objeto de figura interativa
     fig = go.Figure()
+
+    # Bandas de volatilidade (se disponível)
+    if show_advanced and 'Upper_Band' in df.columns and not df['Upper_Band'].isna().all():
+        fig.add_trace(go.Scatter(
+            x=df.index,
+            y=df['Upper_Band'],
+            mode='lines',
+            name='Banda Superior',
+            line=dict(width=0),
+            fillcolor='rgba(255, 82, 82, 0.1)',
+            fill='tonexty',
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=df.index,
+            y=df['Lower_Band'],
+            mode='lines',
+            name='Banda de Volatilidade',
+            line=dict(width=0),
+            fillcolor='rgba(255, 82, 82, 0.1)',
+            fill='tonexty',
+            showlegend=True,
+            hovertemplate='<b>Banda Inferior</b><br>Data: %{x}<br>Preço: R$ %{y:.2f}<extra></extra>'
+        ))
 
     # Área de fundo para o preço spot (gradiente)
     fig.add_trace(go.Scatter(
@@ -374,11 +409,35 @@ def render_price_chart(df):
         x=df.index, 
         y=df['PP_Price'],
         mode='lines',
-        name='Spot Diário',
+        name='Preço Spot',
         line=dict(color='#9E9E9E', width=2),
         opacity=0.7,
-        hovertemplate='<b>Spot Diário</b><br>Data: %{x}<br>Preço: R$ %{y:.2f}<extra></extra>'
+        hovertemplate='<b>Preço Spot</b><br>Data: %{x}<br>Preço: R$ %{y:.2f}<extra></extra>'
     ))
+
+    # Média móvel de 30 dias (se disponível)
+    if show_advanced and 'MA_30' in df.columns and df['MA_30'] is not None and not df['MA_30'].isna().all():
+        fig.add_trace(go.Scatter(
+            x=df.index,
+            y=df['MA_30'],
+            mode='lines',
+            name='Média 30 dias',
+            line=dict(color='#448AFF', width=2, dash='dash'),
+            opacity=0.6,
+            hovertemplate='<b>Média 30 dias</b><br>Data: %{x}<br>Preço: R$ %{y:.2f}<extra></extra>'
+        ))
+
+    # Média móvel de 7 dias (se disponível)
+    if show_advanced and 'MA_7' in df.columns and not df['MA_7'].isna().all():
+        fig.add_trace(go.Scatter(
+            x=df.index,
+            y=df['MA_7'],
+            mode='lines',
+            name='Média 7 dias',
+            line=dict(color='#00E676', width=2, dash='dot'),
+            opacity=0.7,
+            hovertemplate='<b>Média 7 dias</b><br>Data: %{x}<br>Preço: R$ %{y:.2f}<extra></extra>'
+        ))
 
     # Linha da Tendência (Dourada com gradiente e brilho)
     fig.add_trace(go.Scatter(
@@ -568,3 +627,79 @@ def render_modern_card(title, value, subtitle="", icon="", color="gold"):
     </div>
     """
     st.markdown(card_html, unsafe_allow_html=True)
+
+def render_advanced_metrics_chart(df):
+    """Renderiza gráfico com múltiplas métricas em subplots."""
+    from plotly.subplots import make_subplots
+    
+    if 'PP_Price' not in df.columns or df.empty or len(df) < 7:
+        st.warning("Dados insuficientes para gráfico avançado.")
+        return
+    
+    # Calcula métricas
+    df = df.copy()
+    df['Volatility'] = df['PP_Price'].pct_change().rolling(window=7).std() * 100
+    
+    # Cria subplots
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.1,
+        subplot_titles=('Evolução de Preços', 'Volatilidade (%)'),
+        row_heights=[0.7, 0.3]
+    )
+    
+    # Gráfico 1: Preços
+    fig.add_trace(
+        go.Scatter(
+            x=df.index,
+            y=df['PP_Price'],
+            mode='lines',
+            name='Preço',
+            line=dict(color='#FFD700', width=2)
+        ),
+        row=1, col=1
+    )
+    
+    if 'Trend' in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df['Trend'],
+                mode='lines',
+                name='Tendência',
+                line=dict(color='#00E676', width=2, dash='dash')
+            ),
+            row=1, col=1
+        )
+    
+    # Gráfico 2: Volatilidade
+    fig.add_trace(
+        go.Bar(
+            x=df.index,
+            y=df['Volatility'],
+            name='Volatilidade',
+            marker_color='#FF5252',
+            opacity=0.6
+        ),
+        row=2, col=1
+    )
+    
+    fig.update_layout(
+        height=600,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color='#B8C5D6', family='Inter'),
+        showlegend=True,
+        legend=dict(
+            bgcolor="rgba(26, 35, 50, 0.8)",
+            bordercolor="rgba(255, 215, 0, 0.2)"
+        )
+    )
+    
+    fig.update_xaxes(showgrid=True, gridcolor='rgba(255, 255, 255, 0.05)', row=1, col=1)
+    fig.update_xaxes(showgrid=True, gridcolor='rgba(255, 255, 255, 0.05)', row=2, col=1)
+    fig.update_yaxes(showgrid=True, gridcolor='rgba(255, 255, 255, 0.05)', row=1, col=1)
+    fig.update_yaxes(showgrid=True, gridcolor='rgba(255, 255, 255, 0.05)', row=2, col=1)
+    
+    st.plotly_chart(fig, use_container_width=True)

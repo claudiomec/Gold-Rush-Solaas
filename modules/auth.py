@@ -1,5 +1,6 @@
 import streamlit as st
 from modules.database import get_db
+from modules.security import check_password, is_password_hashed
 
 def authenticate(username, password):
     """
@@ -11,10 +12,24 @@ def authenticate(username, password):
     if db:
         try:
             users_ref = db.collection('users')
-            query = users_ref.where('username', '==', username).where('password', '==', password).stream()
+            # Busca pelo username (não pela senha, pois agora é hash)
+            query = users_ref.where('username', '==', username).stream()
             
             for doc in query:
                 user_data = doc.to_dict()
+                stored_password = user_data.get('password', '')
+                
+                # Verifica se a senha está em hash ou texto plano (compatibilidade com usuários antigos)
+                if is_password_hashed(stored_password):
+                    # Senha está em hash - verifica usando bcrypt
+                    if not check_password(password, stored_password):
+                        continue  # Senha incorreta, tenta próximo usuário
+                else:
+                    # Senha antiga em texto plano - verifica diretamente (migração gradual)
+                    if stored_password != password:
+                        continue  # Senha incorreta
+                    # Se senha antiga estiver correta, podemos migrar para hash aqui
+                    # (opcional: atualizar para hash no próximo login)
                 
                 # --- BLOQUEIO DE SEGURANÇA (KYC) ---
                 # Se verified existe e é False, bloqueia o acesso.
