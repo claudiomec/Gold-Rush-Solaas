@@ -306,7 +306,7 @@ def create_user(
             
             # Verifica se email já existe (na transação)
             email_query = users_ref.where('email', '==', email).limit(1)
-            email_docs = list(email_query.stream())
+            email_docs = list(email_query.stream(transaction=transaction))
             if email_docs:
                 raise DuplicateUserError("Email já cadastrado.")
             
@@ -447,7 +447,7 @@ def update_user(
             if new_email != current_data.get('email'):
                 # Verifica se novo email já existe em outro usuário (na transação)
                 email_query = users_ref.where('email', '==', new_email).limit(1)
-                email_docs = list(email_query.stream())
+                email_docs = list(email_query.stream(transaction=transaction))
                 for doc in email_docs:
                     if doc.id != snapshot.id:  # Não é o mesmo usuário
                         raise DuplicateUserError("Este novo e-mail já está em uso.")

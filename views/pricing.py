@@ -146,7 +146,7 @@ def view_pricing():
                 </ul>
         """, unsafe_allow_html=True)
         
-        if st.button("Assinar Agora", key="btn_starter", use_container_width=True):
+        if st.button("Assinar Agora", key="btn_professional", use_container_width=True):
             user_id = st.session_state.get('user_name')
             if user_id:
                 try:
@@ -158,7 +158,7 @@ def view_pricing():
                     
                     ok, msg, checkout_url = payment.create_checkout_session(
                         user_id=user_id,
-                        plan_type=PlanType.STARTER,
+                        plan_type=PlanType.PROFESSIONAL,
                         success_url=success_url,
                         cancel_url=cancel_url
                     )
