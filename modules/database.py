@@ -13,25 +13,55 @@ def hash_password(password):
 def get_db():
     """Conecta ao Firestore com auto-reparo de chave."""
     try:
-        if firebase_admin._apps: return firestore.client()
-        if "firebase" in st.secrets:
+        # Se já está inicializado, retorna o cliente existente
+        if firebase_admin._apps: 
+            return firestore.client()
+        
+        # Verifica se as credenciais estão configuradas
+        if "firebase" not in st.secrets:
+            print("⚠️ Aviso: Credenciais do Firebase não encontradas em st.secrets")
+            return None
+        
+        # Tenta carregar as credenciais
+        try:
             if "text_key" in st.secrets["firebase"]:
                 key_dict = json.loads(st.secrets["firebase"]["text_key"])
             else:
                 key_dict = dict(st.secrets["firebase"])
-            
-            if "private_key" in key_dict:
+        except json.JSONDecodeError as e:
+            print(f"❌ Erro ao fazer parse do JSON das credenciais: {e}")
+            return None
+        
+        # Sanitiza a chave privada se existir
+        if "private_key" in key_dict:
+            try:
                 pk = key_dict["private_key"]
+                # Remove headers e formatação existente
                 pk = pk.replace("-----BEGIN PRIVATE KEY-----", "").replace("-----END PRIVATE KEY-----", "")
+                # Remove quebras de linha e espaços
                 pk = pk.replace("\\n", "").replace("\n", "").replace(" ", "").replace("\t", "").replace('"', '').replace("'", "")
+                # Reaplica o formato correto
                 key_dict["private_key"] = "-----BEGIN PRIVATE KEY-----\n" + pk + "\n-----END PRIVATE KEY-----"
+            except Exception as e:
+                print(f"❌ Erro ao processar chave privada: {e}")
+                return None
 
+        # Tenta criar as credenciais e inicializar
+        try:
             cred = credentials.Certificate(key_dict)
             firebase_admin.initialize_app(cred)
             return firestore.client()
-        return None
+        except ValueError as e:
+            # Erro comum: chave privada inválida ou formato incorreto
+            print(f"❌ Erro de validação das credenciais Firebase: {e}")
+            print("💡 Verifique se a chave privada está no formato correto no st.secrets")
+            return None
+        except Exception as e:
+            print(f"❌ Erro ao inicializar Firebase: {e}")
+            return None
+            
     except Exception as e:
-        print(f"DB Connection Error: {e}")
+        print(f"❌ Erro inesperado na conexão com o banco: {e}")
         return None
 
 def create_user(username, email, password, name, role, modules):
