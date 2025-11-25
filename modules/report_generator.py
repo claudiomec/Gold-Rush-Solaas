@@ -101,4 +101,6 @@ def generate_pdf_report(df, current_price, trend_pct, ocean, dollar, suggestion)
     pdf.multi_cell(0, 5, "Este relatorio e gerado automaticamente com base em modelos estatisticos. A Gold Rush nao se responsabiliza por decisoes comerciais tomadas com base nestes dados.")
     
     # Retorna o binário do PDF
-    return pdf.output(dest='S').encode('latin-1')
+    # BUG FIX: pdf.output(dest='S') já retorna bytes, não precisa codificar novamente
+    # A codificação 'latin-1' causava erro com caracteres especiais (acentos em português)
+    return pdf.output(dest='S')
