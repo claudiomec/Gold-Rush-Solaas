@@ -5,6 +5,9 @@ import streamlit as st
 from datetime import datetime, timedelta
 from modules.database import get_db
 import streamlit_antd_components as sac
+import logging
+
+logger = logging.getLogger(__name__)
 
 def add_notification(user_id, title, message, type="info", priority="normal"):
     """
@@ -112,11 +115,16 @@ def get_unread_count(user_id):
 
 def render_notification_bell():
     """Renderiza o ícone de sino de notificações na sidebar."""
-    user_id = st.session_state.get('user_name')
-    if not user_id:
+    try:
+        user_id = st.session_state.get('user_name')
+        if not user_id:
+            return
+        
+        unread_count = get_unread_count(user_id)
+    except Exception as e:
+        # Se houver qualquer erro (ex: banco offline), simplesmente não mostra notificações
+        logger.warning(f"Erro ao renderizar notificações: {e}")
         return
-    
-    unread_count = get_unread_count(user_id)
     
     if unread_count > 0:
         st.markdown(f"""

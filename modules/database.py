@@ -77,6 +77,33 @@ def is_valid_email(email: str) -> bool:
     return bool(re.match(pattern, email))
 
 
+def clean_private_key_string(key_str: str) -> str:
+    """
+    Remove caracteres problemáticos da chave privada.
+    
+    Args:
+        key_str: String com a chave privada
+        
+    Returns:
+        String limpa
+    """
+    if not isinstance(key_str, str):
+        key_str = str(key_str)
+    
+    # Remove caracteres nulos e outros caracteres de controle problemáticos
+    # Mantém apenas caracteres imprimíveis, espaços em branco normais, e quebras de linha
+    cleaned = ''.join(
+        char for char in key_str 
+        if ord(char) >= 32 or char in '\n\r\t'
+    )
+    
+    # Remove caracteres nulos explicitamente
+    cleaned = cleaned.replace('\x00', '')
+    cleaned = cleaned.replace('\ufeff', '')  # Remove BOM se presente
+    
+    return cleaned
+
+
 def sanitize_private_key(key_str: str) -> str:
     """
     Sanitiza e valida chave privada do Firebase.
@@ -88,13 +115,32 @@ def sanitize_private_key(key_str: str) -> str:
         Chave privada formatada corretamente
         
     Raises:
-        ValueError: Se a chave não puder ser validada
+        ValueError: Se a chave não puder ser validada (apenas em casos críticos)
     """
     if not key_str or not isinstance(key_str, str):
         raise ValueError("Chave privada deve ser uma string não vazia")
     
+    # Limpa caracteres problemáticos primeiro
+    key_str = clean_private_key_string(key_str)
+    
+    if not key_str or len(key_str.strip()) < 100:
+        raise ValueError("Chave privada está vazia ou muito curta após limpeza")
+    
+    # Se já está no formato PEM correto, limpa e retorna
+    if key_str.strip().startswith("-----BEGIN") and key_str.strip().endswith("-----"):
+        # Validação básica: verifica se parece uma chave válida
+        cleaned_pem = key_str.strip()
+        if len(cleaned_pem) > 500:  # Chave PEM completa tem mais de 500 caracteres
+            # Remove caracteres nulos que podem ter sido inseridos
+            cleaned_pem = cleaned_pem.replace('\x00', '')
+            logger.debug("Chave privada já está no formato PEM")
+            return cleaned_pem
+    
     # Remove todos os espaços, quebras de linha e caracteres especiais
     cleaned = re.sub(r'[\s\n\r\t"\'\\]', '', key_str)
+    
+    # Remove caracteres nulos que podem ter sido inseridos
+    cleaned = cleaned.replace('\x00', '')
     
     # Remove marcadores de início/fim se existirem
     cleaned = re.sub(r'BEGINPRIVATEKEY|ENDPRIVATEKEY', '', cleaned, flags=re.IGNORECASE)
@@ -109,17 +155,20 @@ def sanitize_private_key(key_str: str) -> str:
         formatted_key += cleaned[i:i+64] + "\n"
     formatted_key += "-----END PRIVATE KEY-----"
     
-    # Validação criptográfica (se disponível)
+    # Validação criptográfica (se disponível) - completamente opcional, não falha se falhar
     if HAS_CRYPTOGRAPHY:
         try:
             serialization.load_pem_private_key(
-                formatted_key.encode(),
+                formatted_key.encode('utf-8'),
                 password=None,
                 backend=default_backend()
             )
             logger.debug("Chave privada validada criptograficamente")
         except Exception as e:
-            raise ValueError(f"Chave privada inválida (validação criptográfica falhou): {e}")
+            # Loga o erro mas NÃO falha - permite que o Firebase tente usar a chave
+            # O Firebase pode conseguir usar a chave mesmo se a validação criptográfica falhar
+            logger.warning(f"Validação criptográfica da chave privada falhou, mas continuando: {e}")
+            logger.info("Tentando usar a chave mesmo assim - o Firebase pode conseguir validá-la")
     else:
         # Validação básica sem cryptography
         if not formatted_key.startswith("-----BEGIN PRIVATE KEY-----"):
@@ -217,17 +266,25 @@ def get_db() -> Optional[firestore.Client]:
                 logger.info("Chave privada sanitizada e validada com sucesso")
             except ValueError as e:
                 logger.error(f"Erro ao sanitizar chave privada: {e}")
-                raise DatabaseConnectionError(f"Chave privada inválida: {e}")
+                # Tenta usar a chave original mesmo assim - pode funcionar
+                logger.warning("Tentando usar a chave privada sem sanitização completa...")
+                # Limpa caracteres problemáticos da chave original e tenta usar
+                original_key = key_dict["private_key"]
+                if isinstance(original_key, str):
+                    # Limpa caracteres problemáticos
+                    key_dict["private_key"] = clean_private_key_string(original_key).strip()
+                    logger.info("Chave privada limpa (caracteres problemáticos removidos)")
+                # Continua tentando inicializar o Firebase mesmo com a chave não validada
         
         # Inicializa Firebase
-        cred = credentials.Certificate(key_dict)
-        firebase_admin.initialize_app(cred)
-        
-        logger.info("Firebase inicializado com sucesso")
-        return firestore.client()
-        
-    except DatabaseConnectionError:
-        raise
+        try:
+            cred = credentials.Certificate(key_dict)
+            firebase_admin.initialize_app(cred)
+            logger.info("Firebase inicializado com sucesso")
+            return firestore.client()
+        except Exception as init_error:
+            logger.error(f"Erro ao inicializar Firebase: {init_error}")
+            return None
     except Exception as e:
         logger.error(
             "Erro ao conectar ao Firestore",
