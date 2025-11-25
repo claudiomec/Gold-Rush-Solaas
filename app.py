@@ -25,44 +25,155 @@ def is_valid_email(email):
 # --- VIEWS ---
 def view_monitor(is_admin):
     with st.sidebar:
-        st.markdown("### ⚙️ Parâmetros")
-        ocean = st.slider("Frete Marítimo", 0, 300, 60, 10)
-        icms = st.selectbox("ICMS", [18, 12, 7, 4])
-        freight = st.slider("Frete Interno", 0.0, 0.5, 0.15, 0.01)
-        margin = st.slider("Margem", 0, 20, 10)
-        st.markdown("---"); st.button("Sair", key='lo1', on_click=auth.logout)
+        st.markdown("### ⚙️ Parâmetros de Cálculo")
+        st.markdown("---")
+        ocean = st.slider("🌊 Frete Marítimo (USD)", 0, 300, 60, 10, help="Custo do frete marítimo em dólares")
+        icms = st.selectbox("📊 ICMS (%)", [18, 12, 7, 4], help="Alíquota de ICMS aplicável")
+        freight = st.slider("🚚 Frete Interno", 0.0, 0.5, 0.15, 0.01, help="Taxa de frete interno")
+        margin = st.slider("💼 Margem (%)", 0, 20, 10, help="Margem de lucro desejada")
+        st.markdown("---")
+        st.button("🚪 Sair", key='lo1', on_click=auth.logout, use_container_width=True)
 
-    st.title("Monitor de Custo Industrial")
+    st.title("📊 Monitor de Custo Industrial")
     col_t, col_b = st.columns([3, 1])
-    with col_t: st.caption("Commodity: Polipropileno")
+    with col_t: 
+        st.markdown("**Commodity:** <span style='color: #FFD700; font-weight: 600;'>Polipropileno</span>", unsafe_allow_html=True)
     
-    with st.spinner('Calculando...'):
+    with st.spinner('⚙️ Calculando métricas...'):
         df = data_engine.calculate_cost_buildup(data_engine.get_market_data(), ocean, freight, icms, margin)
-        curr = df['PP_Price'].iloc[-1]; var = (curr/df['PP_Price'].iloc[-7]-1)*100
+        curr = df['PP_Price'].iloc[-1]
+        var = (curr/df['PP_Price'].iloc[-7]-1)*100 if len(df) >= 7 else 0
         
         with col_b:
             sug = "Alta" if var > 0.5 else "Baixa" if var < -0.5 else "Estavel"
             pdf = report_generator.generate_pdf_report(df, curr, var, ocean, df['USD_BRL'].iloc[-1], sug)
-            st.download_button("📄 Baixar Laudo", pdf, "Laudo.pdf", "application/pdf", use_container_width=True)
+            st.download_button(
+                "📄 Baixar Laudo PDF", 
+                pdf, 
+                "Laudo_Gold_Rush.pdf", 
+                "application/pdf", 
+                use_container_width=True,
+                help="Baixe o relatório completo em PDF"
+            )
         
-        c1,c2,c3,c4 = st.columns(4)
-        c1.metric("Preço Final", f"R$ {curr:.2f}")
-        c2.metric("Tendência", f"{var:.2f}%", delta_color="inverse")
-        c3.metric("Frete", f"USD {ocean}"); c4.metric("Dólar", f"R$ {df['USD_BRL'].iloc[-1]:.4f}")
-        ui_components.render_price_chart(df); ui_components.render_insight_card(var)
+        # Métricas modernas
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            ui_components.render_modern_card(
+                "Preço Final", 
+                f"R$ {curr:.2f}",
+                "Preço atual do commodity",
+                "💰",
+                "gold"
+            )
+        with c2:
+            trend_icon = "📈" if var > 0 else "📉" if var < 0 else "➡️"
+            trend_color = "red" if var > 0.5 else "green" if var < -0.5 else "blue"
+            ui_components.render_modern_card(
+                "Tendência", 
+                f"{var:+.2f}%",
+                "Variação semanal",
+                trend_icon,
+                trend_color
+            )
+        with c3:
+            ui_components.render_modern_card(
+                "Frete Marítimo", 
+                f"USD {ocean}",
+                "Custo do transporte",
+                "🌊",
+                "blue"
+            )
+        with c4:
+            ui_components.render_modern_card(
+                "Taxa USD/BRL", 
+                f"R$ {df['USD_BRL'].iloc[-1]:.4f}",
+                "Cotação atual",
+                "💵",
+                "gold"
+            )
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        ui_components.render_price_chart(df)
+        st.markdown("<br>", unsafe_allow_html=True)
+        ui_components.render_insight_card(var)
 
 def view_calculator():
-    with st.sidebar: st.header("💰 Calculadora"); st.button("Sair", key='lo2', on_click=auth.logout)
+    with st.sidebar: 
+        st.markdown("### 💰 Calculadora Financeira")
+        st.markdown("---")
+        st.button("🚪 Sair", key='lo2', on_click=auth.logout, use_container_width=True)
+    
     st.title("💰 Calculadora Financeira")
+    st.markdown("**Calcule o impacto financeiro da sua compra comparando com o preço justo de mercado**")
+    st.markdown("<br>", unsafe_allow_html=True)
+    
     fair = data_engine.get_fair_price_snapshot()
-    c1, c2 = st.columns(2)
+    c1, c2 = st.columns([1, 1])
+    
     with c1:
-        curr = st.number_input("Preço Pago", value=10.50); vol = st.number_input("Volume (Ton)", value=50)*1000
+        st.markdown("### 📝 Dados da Compra")
+        curr = st.number_input(
+            "💵 Preço Pago (R$/kg)", 
+            value=10.50, 
+            min_value=0.0, 
+            step=0.01,
+            help="Preço que você pagou ou pretende pagar"
+        )
+        vol_ton = st.number_input(
+            "📦 Volume (Toneladas)", 
+            value=50.0, 
+            min_value=0.0, 
+            step=0.1,
+            help="Quantidade em toneladas"
+        )
+        vol = vol_ton * 1000  # Converter para kg
+    
     with c2:
+        st.markdown("### 💎 Análise de Mercado")
         delta = curr - fair
-        st.markdown(f"<div style='background:#262730;padding:15px;border-radius:8px;text-align:center'><span style='color:#AAA'>Preço Justo</span><br><span style='color:#FFD700;font-size:2rem'>R$ {fair:.2f}</span></div><br>", unsafe_allow_html=True)
-        if delta > 0: st.markdown(f"<div class='loss-card'><h3 style='color:#FF4B4B'>🔴 Perda</h3><h2 style='color:#FF4B4B'>R$ {delta*vol:,.2f}</h2></div>", unsafe_allow_html=True)
-        else: st.markdown(f"<div class='savings-card'><h3 style='color:#00CC96'>🟢 Economia</h3><h2 style='color:#00CC96'>R$ {abs(delta)*vol:,.2f}</h2></div>", unsafe_allow_html=True)
+        
+        # Card de Preço Justo
+        ui_components.render_modern_card(
+            "Preço Justo de Mercado",
+            f"R$ {fair:.2f}",
+            "Baseado em análise de custos",
+            "⭐",
+            "gold"
+        )
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # Card de Resultado
+        if delta > 0:
+            loss_amount = delta * vol
+            ui_components.render_modern_card(
+                "🔴 Perda Potencial",
+                f"R$ {loss_amount:,.2f}",
+                f"Você pagou R$ {delta:.2f}/kg acima do justo",
+                "⚠️",
+                "red"
+            )
+            st.warning(f"💡 **Recomendação:** Considere negociar ou aguardar uma melhor oportunidade de compra.")
+        elif delta < 0:
+            savings_amount = abs(delta) * vol
+            ui_components.render_modern_card(
+                "🟢 Economia Realizada",
+                f"R$ {savings_amount:,.2f}",
+                f"Você economizou R$ {abs(delta):.2f}/kg",
+                "✅",
+                "green"
+            )
+            st.success(f"🎉 **Excelente negócio!** Você está comprando abaixo do preço justo de mercado.")
+        else:
+            ui_components.render_modern_card(
+                "⚖️ Preço Equilibrado",
+                "R$ 0,00",
+                "Preço alinhado com o mercado",
+                "✓",
+                "blue"
+            )
+            st.info("💡 **Análise:** Seu preço está alinhado com o mercado justo.")
 
 def view_admin_users():
     st.title("👥 Gestão de Acessos")
@@ -147,26 +258,141 @@ def view_data_export():
 
 # --- MAIN ---
 if not st.session_state.get("password_correct", False):
-    # Login Screen
-    c1,c2,c3 = st.columns([1,2,1])
-    with c2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.image("https://cdn-icons-png.flaticon.com/512/2534/2534183.png", width=120)
-        st.markdown("<h1 style='text-align: center;'>🔐 Gold Rush Access</h1>", unsafe_allow_html=True)
-        with st.form("login"):
-            u = st.text_input("Usuário"); p = st.text_input("Senha", type="password")
-            if st.form_submit_button("Entrar", use_container_width=True):
-                r = auth.authenticate(u, p)
-                if r and "error" in r: st.error(r["error"])
-                elif r:
-                    st.session_state.update({"password_correct": True, "user_role": r.get("role"), "user_name": r.get("name"), "user_modules": r.get("modules", ["Monitor"])})
-                    st.rerun()
-                else: st.error("Inválido.")
+    # Login Screen Moderno
+    st.markdown("""
+        <style>
+        .login-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 80vh;
+            padding: 2rem;
+        }
+        .login-card {
+            background: linear-gradient(135deg, rgba(26, 35, 50, 0.95) 0%, rgba(20, 27, 45, 0.95) 100%);
+            border: 1px solid rgba(255, 215, 0, 0.2);
+            border-radius: 24px;
+            padding: 3rem;
+            max-width: 450px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5),
+                        0 0 0 1px rgba(255, 215, 0, 0.1) inset;
+            animation: slideIn 0.6s ease-out;
+        }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .login-logo {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .login-title {
+            text-align: center;
+            color: #FFD700;
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            text-shadow: 0 0 20px rgba(255, 215, 0, 0.3);
+        }
+        .login-subtitle {
+            text-align: center;
+            color: #B8C5D6;
+            font-size: 0.95rem;
+            margin-bottom: 2rem;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown("""
+            <div class="login-container">
+                <div class="login-card">
+                    <div class="login-logo">
+                        <div style="font-size: 4rem; margin-bottom: 1rem;">🏭</div>
+                    </div>
+                    <h1 class="login-title">Gold Rush Analytics</h1>
+                    <p class="login-subtitle">Acesso ao Sistema de Monitoramento Industrial</p>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        with st.form("login", clear_on_submit=False):
+            st.markdown("<br>", unsafe_allow_html=True)
+            u = st.text_input("📧 E-mail", placeholder="seu@email.com")
+            p = st.text_input("🔒 Senha", type="password", placeholder="••••••••")
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            submitted = st.form_submit_button("🚀 Entrar", use_container_width=True)
+            
+            if submitted:
+                with st.spinner("🔐 Autenticando..."):
+                    r = auth.authenticate(u, p)
+                    if r and "error" in r: 
+                        st.error(f"❌ {r['error']}")
+                    elif r:
+                        st.success(f"✅ Bem-vindo, {r.get('name', 'Usuário')}!")
+                        st.session_state.update({
+                            "password_correct": True, 
+                            "user_role": r.get("role"), 
+                            "user_name": r.get("name"), 
+                            "user_modules": r.get("modules", ["Monitor"])
+                        })
+                        time.sleep(0.5)
+                        st.rerun()
+                    else: 
+                        st.error("❌ Credenciais inválidas. Verifique seu e-mail e senha.")
 else:
     role = st.session_state["user_role"]
     with st.sidebar:
-        if role == "admin": st.success(f"Admin: {st.session_state['user_name']}")
-        else: st.info(f"Cliente: {st.session_state['user_name']}")
+        # Header da Sidebar Moderno
+        st.markdown("""
+            <div style="
+                background: linear-gradient(135deg, rgba(255, 215, 0, 0.1), rgba(255, 165, 0, 0.05));
+                border: 1px solid rgba(255, 215, 0, 0.2);
+                border-radius: 12px;
+                padding: 1rem;
+                margin-bottom: 1.5rem;
+                text-align: center;
+            ">
+                <div style="font-size: 2rem; margin-bottom: 0.5rem;">🏭</div>
+                <div style="color: #FFD700; font-weight: 700; font-size: 1.1rem;">Gold Rush</div>
+                <div style="color: #B8C5D6; font-size: 0.85rem; margin-top: 0.25rem;">Analytics Platform</div>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Badge de Usuário
+        user_name = st.session_state.get('user_name', 'Usuário')
+        if role == "admin": 
+            st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, rgba(255, 82, 82, 0.15), rgba(244, 67, 54, 0.1));
+                    border: 1px solid rgba(255, 82, 82, 0.3);
+                    border-radius: 10px;
+                    padding: 0.75rem;
+                    margin-bottom: 1rem;
+                    text-align: center;
+                ">
+                    <div style="color: #FF5252; font-weight: 600;">👑 Administrador</div>
+                    <div style="color: #FFFFFF; font-size: 0.9rem; margin-top: 0.25rem;">{user_name}</div>
+                </div>
+            """, unsafe_allow_html=True)
+        else: 
+            st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, rgba(68, 138, 255, 0.15), rgba(33, 150, 243, 0.1));
+                    border: 1px solid rgba(68, 138, 255, 0.3);
+                    border-radius: 10px;
+                    padding: 0.75rem;
+                    margin-bottom: 1rem;
+                    text-align: center;
+                ">
+                    <div style="color: #448AFF; font-weight: 600;">👤 Cliente</div>
+                    <div style="color: #FFFFFF; font-size: 0.9rem; margin-top: 0.25rem;">{user_name}</div>
+                </div>
+            """, unsafe_allow_html=True)
+        
         pg = ui_components.render_sidebar_menu(role, st.session_state.get("user_modules", []))
 
     if pg == "LOGOUT_ACTION": auth.logout()
