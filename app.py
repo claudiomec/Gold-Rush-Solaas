@@ -61,8 +61,19 @@ def view_monitor(is_admin):
             return
         
         curr = df['PP_Price'].iloc[-1]
-        var = (curr/df['PP_Price'].iloc[-7]-1)*100 if len(df) >= 7 else 0
         
+        # BUG FIX: Cálculo de variação baseado em tempo (7 dias) e não em linhas fixas
+        # Isso garante que comparamos com exatos 7 dias atrás, mesmo com lacunas nos dados
+        try:
+            target_date = df.index[-1] - pd.Timedelta(days=7)
+            # Busca o índice mais próximo da data alvo
+            idx = df.index.get_indexer([target_date], method='nearest')[0]
+            past_price = df['PP_Price'].iloc[idx]
+            var = (curr / past_price - 1) * 100
+        except Exception:
+            # Fallback: se houver erro, usa cálculo simples baseado em linhas
+            var = (curr/df['PP_Price'].iloc[-7]-1)*100 if len(df) >= 7 else 0
+            
         with col_b:
             sug = "Alta" if var > 0.5 else "Baixa" if var < -0.5 else "Estavel"
             pdf = report_generator.generate_pdf_report(df, curr, var, ocean, df['USD_BRL'].iloc[-1], sug)

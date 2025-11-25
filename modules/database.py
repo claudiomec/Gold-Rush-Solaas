@@ -5,43 +5,115 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from modules.security import hash_password, check_password, is_password_hashed
 
-@st.cache_resource
-def get_db():
-    """Conecta ao Firestore com auto-reparo de chave."""
+def clear_db_cache():
+    """
+    Limpa o cache do Streamlit para get_db().
+    Útil quando há problemas de conexão que precisam ser resolvidos.
+    """
     try:
-        if firebase_admin._apps: return firestore.client()
-        if "firebase" in st.secrets:
-            if "text_key" in st.secrets["firebase"]:
-                key_dict = json.loads(st.secrets["firebase"]["text_key"])
-            else:
-                key_dict = dict(st.secrets["firebase"])
-            
-            if "private_key" in key_dict:
-                pk = key_dict["private_key"]
-                pk = pk.replace("-----BEGIN PRIVATE KEY-----", "").replace("-----END PRIVATE KEY-----", "")
-                pk = pk.replace("\\n", "").replace("\n", "").replace(" ", "").replace("\t", "").replace('"', '').replace("'", "")
-                key_dict["private_key"] = "-----BEGIN PRIVATE KEY-----\n" + pk + "\n-----END PRIVATE KEY-----"
+        get_db.cache_clear()
+    except Exception:
+        pass
 
-            cred = credentials.Certificate(key_dict)
-            firebase_admin.initialize_app(cred)
+def _get_db_internal():
+    """
+    Função interna que faz a conexão real.
+    Separada para permitir limpeza de cache se necessário.
+    """
+    # Se já está inicializado, retorna o cliente existente
+    try:
+        if firebase_admin._apps: 
             return firestore.client()
+    except Exception:
+        pass
+    
+    # Verifica se as credenciais estão configuradas
+    try:
+        if "firebase" not in st.secrets:
+            print("⚠️ Aviso: Credenciais do Firebase não encontradas em st.secrets")
+            return None
+    except Exception as e:
+        print(f"⚠️ Erro ao acessar st.secrets: {e}")
+        return None
+    
+    # Tenta carregar as credenciais
+    key_dict = None
+    try:
+        if "text_key" in st.secrets["firebase"]:
+            key_dict = json.loads(st.secrets["firebase"]["text_key"])
+        else:
+            key_dict = dict(st.secrets["firebase"])
+    except json.JSONDecodeError as e:
+        print(f"❌ Erro ao fazer parse do JSON das credenciais: {e}")
         return None
     except Exception as e:
-        print(f"DB Connection Error: {e}")
+        print(f"❌ Erro ao carregar credenciais: {e}")
+        return None
+    
+    if not key_dict:
+        print("⚠️ Aviso: Credenciais do Firebase vazias")
+        return None
+    
+    # Sanitiza a chave privada se existir
+    if "private_key" in key_dict:
+        try:
+            pk = str(key_dict["private_key"])
+            # Remove headers e formatação existente
+            pk = pk.replace("-----BEGIN PRIVATE KEY-----", "").replace("-----END PRIVATE KEY-----", "")
+            # Remove quebras de linha e espaços
+            pk = pk.replace("\\n", "").replace("\n", "").replace(" ", "").replace("\t", "").replace('"', '').replace("'", "")
+            # Reaplica o formato correto
+            key_dict["private_key"] = "-----BEGIN PRIVATE KEY-----\n" + pk + "\n-----END PRIVATE KEY-----"
+        except Exception as e:
+            print(f"❌ Erro ao processar chave privada: {e}")
+            return None
+
+    # Tenta criar as credenciais e inicializar
+    try:
+        cred = credentials.Certificate(key_dict)
+        firebase_admin.initialize_app(cred)
+        return firestore.client()
+    except ValueError as e:
+        # Erro comum: chave privada inválida ou formato incorreto
+        print(f"❌ Erro de validação das credenciais Firebase: {e}")
+        print("💡 Verifique se a chave privada está no formato correto no st.secrets")
+        return None
+    except Exception as e:
+        print(f"❌ Erro ao inicializar Firebase: {e}")
+        return None
+
+@st.cache_resource
+def get_db():
+    """
+    Conecta ao Firestore com auto-reparo de chave.
+    NUNCA levanta exceções - sempre retorna None em caso de erro.
+    """
+    try:
+        return _get_db_internal()
+    except Exception as e:
+        # Garantia final: nunca levantar exceção
+        print(f"❌ Erro crítico na conexão com o banco (capturado): {e}")
         return None
 
 def create_user(username, email, password, name, role, modules):
     db = get_db()
     if not db: return False, "Banco Offline.", None
     try:
-        # Tenta usar o username como ID para unicidade
-        doc_ref = db.collection('users').document(username)
-        if doc_ref.get().exists: return False, "Login já existe.", None
+        # BUG FIX: Verificar unicidade pelo campo 'username', não apenas pelo ID do documento
+        # Isso evita duplicatas caso o ID divirja do username (ex: após troca de email)
+        dup_check = db.collection('users').where('username', '==', username).limit(1).stream()
+        for _ in dup_check:
+            return False, "Login já existe.", None
 
-        # Hash da senha antes de armazenar
+        # Tenta usar o username como ID para unicidade (ainda útil para organização)
+        doc_ref = db.collection('users').document(username)
+        # Se o ID já existir (e não foi pego pelo query acima por inconsistência), também bloqueia
+        if doc_ref.get().exists: return False, "Login já existe (ID).", None
+
+        token = str(uuid.uuid4())
+        # Hash da senha antes de salvar (usando bcrypt do módulo security)
         password_hash = hash_password(password)
         
-        token = str(uuid.uuid4())
         doc_ref.set({
             'username': username, 'email': email, 'password': password_hash, 'name': name,
             'role': role, 'modules': modules, 'verified': False, 'verification_token': token,

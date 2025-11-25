@@ -78,7 +78,9 @@ def calculate_cost_buildup(df, ocean_freight, freight_internal, icms_pct, margin
     df['Operational_Cost'] = df['Landed_BRL'] + freight_internal
     df['Price_Net'] = df['Operational_Cost'] * (1 + (margin_pct / 100))
     df['PP_Price'] = df['Price_Net'] / (1 - (icms_pct / 100))
-    df['Trend'] = df['PP_Price'].rolling(window=7).mean()
+    # BUG FIX: Usar janela de tempo ('7D') em vez de registros fixos (window=7)
+    # Isso garante que a média seja de 7 dias cronológicos, independente de feriados/fins de semana
+    df['Trend'] = df['PP_Price'].rolling(window='7D').mean()
     return df
 
 def get_fair_price_snapshot():
